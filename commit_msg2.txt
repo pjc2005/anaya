@@ -1,9 +1,0 @@
-Add delete option in editor screen & make home cards clickable
-
-- TransactionEditorScreen: delete icon button in top bar (only when
-  editing existing transaction) with confirmation dialog
-- HomeScreen: recent transaction cards now clickable to enter editor,
-  long press shows delete confirmation dialog
-- HomeViewModel: add deleteTransaction(id) method
-- TransactionEditorViewModel: add deleteTransaction() method
-- NavGraph: wire onTransactionClick for HomeScreen
