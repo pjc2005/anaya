@@ -58,6 +58,11 @@ sealed class Screen(
         label = "账户管理"
     )
 
+    data object SmartCapture : Screen(
+        route = "smart_capture",
+        label = "智能捕获"
+    )
+
     companion object {
         val bottomNavItems = listOf(Home, Transactions, Stats, Budget, Settings)
     }

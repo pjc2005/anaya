@@ -12,6 +12,7 @@ import com.anaya.app.presentation.home.HomeScreen
 import com.anaya.app.presentation.settings.AccountManagerScreen
 import com.anaya.app.presentation.settings.CategoryManagerScreen
 import com.anaya.app.presentation.settings.SettingsScreen
+import com.anaya.app.presentation.smartcapture.SmartCaptureScreen
 import com.anaya.app.presentation.stats.StatsScreen
 import com.anaya.app.presentation.transaction.TransactionListScreen
 import com.anaya.app.presentation.transaction.editor.TransactionEditorScreen
@@ -69,6 +70,9 @@ fun NavGraph(
                 },
                 onNavigateToAccounts = {
                     navController.navigate(Screen.AccountManager.route)
+                },
+                onNavigateToSmartCapture = {
+                    navController.navigate(Screen.SmartCapture.route)
                 }
             )
         }
@@ -81,6 +85,12 @@ fun NavGraph(
 
         composable(Screen.AccountManager.route) {
             AccountManagerScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.SmartCapture.route) {
+            SmartCaptureScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }

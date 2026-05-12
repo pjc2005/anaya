@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +21,7 @@ import androidx.compose.ui.unit.dp
 fun SettingsScreen(
     onNavigateToCategories: () -> Unit = {},
     onNavigateToAccounts: () -> Unit = {},
+    onNavigateToSmartCapture: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     Scaffold(
@@ -48,6 +50,14 @@ fun SettingsScreen(
                 title = "账户管理",
                 subtitle = "管理银行卡、支付宝等账户",
                 onClick = onNavigateToAccounts
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+
+            SettingsItem(
+                icon = Icons.Default.Visibility,
+                title = "智能捕获",
+                subtitle = "剪贴板监听 & 自动识别支付信息",
+                onClick = onNavigateToSmartCapture
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
 

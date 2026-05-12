@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Anaya</string>
+    <string name="accessibility_service_description">Anaya记账自动识别服务——监听支付应用的通知和页面变化，自动捕获消费信息</string>
 </resources>

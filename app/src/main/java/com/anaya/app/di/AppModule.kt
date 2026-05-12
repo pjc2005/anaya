@@ -15,6 +15,8 @@ import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.BudgetRepository
 import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.domain.repository.TransactionRepository
+import com.anaya.app.ml.LocalModelInterface
+import com.anaya.app.ml.LocalModelManager
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -46,6 +48,11 @@ abstract class AppModule {
     abstract fun bindBudgetRepository(
         impl: BudgetRepositoryImpl
     ): BudgetRepository
+
+    @Binds
+    abstract fun bindLocalModel(
+        impl: LocalModelManager
+    ): LocalModelInterface
 
     companion object {
 
