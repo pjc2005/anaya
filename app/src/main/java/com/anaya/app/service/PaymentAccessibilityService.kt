@@ -178,10 +178,13 @@ class PaymentAccessibilityService : AccessibilityService() {
                     "%.2f元".format(it / 100.0)
                 } ?: ""
                 val merchantStr = resultWithPlatform.merchant ?: ""
+                Log.i(TAG, "Detected: ${result.platform?.label} $merchantStr $amountStr → auto-saved")
                 showNotification(
-                    "检测到支付 [${result.platform?.label}]",
+                    "已自动记账 [${result.platform?.label}]",
                     "$merchantStr $amountStr"
                 )
+            } else {
+                Log.w(TAG, "Detected ${result.platform?.label} but no amount/merchant extracted: ${result.pageText.take(80)}")
             }
         }
     }
@@ -220,7 +223,11 @@ class PaymentAccessibilityService : AccessibilityService() {
         val channel = NotificationChannel(
             "payment_detect", "支付检测",
             NotificationManager.IMPORTANCE_HIGH
-        )
+        ).apply {
+            description = "检测到支付时自动记录并发送通知"
+            enableVibration(true)
+            setShowBadge(true)
+        }
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(channel)
     }
@@ -233,6 +240,7 @@ class PaymentAccessibilityService : AccessibilityService() {
             .setContentText(content)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
             .build()
         nm.notify(System.currentTimeMillis().toInt(), notification)
     }

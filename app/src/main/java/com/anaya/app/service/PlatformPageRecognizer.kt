@@ -135,17 +135,25 @@ class PlatformPageRecognizer {
         val full = texts.joinToString("")
         val clicks = clickableTexts.joinToString("")
 
+        // 通用检测：检测页面是否有金额信息 + 完成按钮（强支付完成信号）
+        val hasAmount = Regex("[¥￥]?\\s*\\d+(\\.\\d{1,2})?\\s*元?").containsMatchIn(full)
+        val hasDoneButton = clicks.contains("完成")
+        val paymentKeywords = listOf("支付成功", "付款成功", "交易成功", "支付完成",
+            "交易已完成", "您已成功付款", "支付结果", "已完成")
+        val hasPaymentKeyword = paymentKeywords.any { full.contains(it) }
+        val isPaymentComplete = hasPaymentKeyword || (hasAmount && hasDoneButton)
+
         return when (platform) {
             Platform.WECHAT -> when {
                 "红包" in full && ("查看红包" in full || "开" in texts) -> PageType.RED_PACKET
                 "转账给你" in full || "确认收款" in full -> PageType.TRANSFER
-                "支付成功" in full || "交易成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete || "支付成功" in full || "交易成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
                 "账单" in full && "本月" in full -> PageType.WALLET_BILL
                 else -> PageType.UNKNOWN
             }
 
             Platform.ALIPAY -> when {
-                "支付成功" in full || "付款成功" in full || "交易成功" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete || "支付成功" in full || "付款成功" in full || "交易成功" in full -> PageType.PAYMENT_COMPLETE
                 "账单" in full && ("收支" in full || "月" in full) -> PageType.WALLET_BILL
                 "转账" in full && "确认" in full -> PageType.TRANSFER
                 else -> PageType.UNKNOWN
@@ -159,38 +167,30 @@ class PlatformPageRecognizer {
             }
 
             Platform.JD -> when {
-                "全部订单信息" in clicks -> {
-                    // 用户刚点了"全部订单信息"→ 等下一帧重新识别
-                    PageType.ALL_ORDER_INFO
-                }
-                "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                "全部订单信息" in clicks -> PageType.ALL_ORDER_INFO
+                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
                 "订单详情" in full -> PageType.ORDER_DETAIL
                 "账单" in full || "钱包" in full -> PageType.WALLET_BILL
                 else -> PageType.UNKNOWN
             }
 
             Platform.MEITUAN -> when {
-                "支付方式" in clicks || "支付方式" in full -> {
-                    PageType.PAYMENT_METHOD
-                }
-                "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                "支付方式" in clicks || "支付方式" in full -> PageType.PAYMENT_METHOD
+                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
                 "订单详情" in full -> PageType.ORDER_DETAIL
                 "账单" in full || "钱包" in full -> PageType.WALLET_BILL
                 else -> PageType.UNKNOWN
             }
 
             Platform.DOUYIN -> when {
-                "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
                 else -> PageType.UNKNOWN
             }
 
             Platform.PDD -> when {
-                "查看更多订单和优惠信息" in clicks -> {
-                    // 用户点了展开按钮，等下一帧重新识别
-                    PageType.ALL_ORDER_INFO
-                }
+                "查看更多订单和优惠信息" in clicks -> PageType.ALL_ORDER_INFO
                 "订单详情" in full -> PageType.ORDER_DETAIL
-                "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
                 else -> PageType.UNKNOWN
             }
         }
