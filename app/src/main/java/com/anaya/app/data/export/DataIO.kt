@@ -280,16 +280,50 @@ class DataExportImport @Inject constructor(
 
     // ── 智能导入辅助方法 ──
 
-    /** 分类解析 — 从 note 中提取 "分类:xxx" 并匹配/创建分类 */
+    /** 智能分类解析 — 多级匹配策略 */
     private suspend fun resolveCategoryIds(
         preview: SmartImportPreview,
         existingCategories: List<CategoryEntity>
     ): SmartImportPreview {
         if (preview.transactions.isEmpty()) return preview
 
-        val catMap = existingCategories.associateBy { it.name }
+        // 构建查找表：
+        //   exactMap: 全名匹配 (学习 → 教育/学习)
+        //   suffixMap: 后缀匹配 (学习 → 教育/学习)
+        //   parentNames: 所有父级名称 (餐饮/教育/交通...)
+        val exactMap = mutableMapOf<String, CategoryEntity>()
+        val suffixMap = mutableMapOf<String, CategoryEntity>()    // 匹配 "/子类名"
+        val parentNames = mutableSetOf<String>()                  // 所有父级名称
+
+        for (cat in existingCategories) {
+            exactMap[cat.name] = cat
+            val slashIdx = cat.name.indexOf('/')
+            if (slashIdx >= 0) {
+                val subName = cat.name.substring(slashIdx + 1)
+                suffixMap[subName] = cat
+                parentNames.add(cat.name.substring(0, slashIdx))
+            } else {
+                parentNames.add(cat.name)
+            }
+        }
+
+        // 规则映射：常见钱迹分类 → 建议的父级
+        val parentHints = mapOf(
+            "三餐" to "餐饮", "早餐" to "餐饮", "午餐" to "餐饮", "晚餐" to "餐饮",
+            "零食" to "购物", "饮料" to "餐饮",
+            "学习" to "教育", "培训" to "教育", "考试" to "教育", "书本" to "教育",
+            "水电煤" to "住房", "房租" to "住房", "物业" to "住房",
+            "收红包" to "红包", "红包" to "红包",
+            "转账" to "转账",
+            "话费" to "通讯", "流量" to "通讯",
+            "电影" to "娱乐", "游戏" to "娱乐",
+            "看病" to "医疗", "药品" to "医疗", "医院" to "医疗",
+            "服装" to "购物", "服饰" to "购物", "日用" to "购物"
+        )
+
         val createdCats = mutableListOf<CategoryEntity>()
-        var updatedCount = 0
+        var matchedCount = 0
+        var modelUsed = false
 
         val enriched = preview.transactions.map { tx ->
             val note = tx.note ?: return@map tx
@@ -297,53 +331,103 @@ class DataExportImport @Inject constructor(
             val idx = note.indexOf(prefix)
             if (idx < 0) return@map tx
 
-            // 提取分类名称（到行尾或下一个 |）
+            // 提取分类名称
             val afterPrefix = note.substring(idx + prefix.length)
             val catName = afterPrefix.split(" | ", "|").first().trim().take(50)
             if (catName.isBlank()) return@map tx
 
-            // 从已有分类中查找
-            val category = catMap[catName] ?: createdCats.find { it.name == catName }
-            val catId: Long
-
+            // ── 策略 1: 精确全名匹配 ──
+            var category = exactMap[catName]
             if (category != null) {
-                catId = category.id
-            } else {
-                // 创建新分类
+                matchedCount++
+                return@map tx.copy(
+                    categoryId = category.id,
+                    note = cleanCategoryFromNote(note, catName)
+                )
+            }
+
+            // ── 策略 2: 后缀匹配 — 已有分类格式为 "父/子" ──
+            category = suffixMap[catName]
+            if (category != null) {
+                matchedCount++
+                return@map tx.copy(
+                    categoryId = category.id,
+                    note = cleanCategoryFromNote(note, catName)
+                )
+            }
+
+            // ── 策略 3: 规则匹配父级，创建子分类 ──
+            val suggestedParent = parentHints[catName]
+            if (suggestedParent != null && suggestedParent in parentNames) {
+                // 创建"父/子"分类
+                val newCatName = "$suggestedParent/$catName"
                 val newCat = CategoryEntity(
-                    name = catName,
-                    type = when (tx.type) {
-                        "INCOME" -> "INCOME"
-                        "TRANSFER" -> "EXPENSE"
-                        else -> "EXPENSE"
-                    },
-                    icon = null
+                    name = newCatName, type = when (tx.type) {
+                        "INCOME" -> "INCOME"; else -> "EXPENSE"
+                    }, icon = null
                 )
                 val newId = categoryDao.insert(newCat)
                 createdCats.add(newCat.copy(id = newId))
-                catId = newId
+                matchedCount++
+                return@map tx.copy(
+                    categoryId = newId,
+                    note = cleanCategoryFromNote(note, catName)
+                )
             }
 
-            // 从 note 中移除 "分类:xxx"
-            val cleanedNote = note
-                .replace(Regex("""\s*\|\s*分类:$catName"""), "")
-                .replace(Regex("""分类:$catName\s*\|\s*"""), "")
-                .replace("分类:$catName", "")
-                .trim()
-                .takeIf { it.isNotBlank() }
+            // ── 策略 4: AI 模型分类（模型已加载时） ──
+            if (localModel.isModelLoaded() && !modelUsed) {
+                try {
+                    val modelResult = localModel.classifyTransaction(
+                        merchant = null,
+                        note = catName,
+                        amount = tx.amount,
+                        existingCategories = existingCategories.map { it.name }
+                    )
+                    if (modelResult.confidence >= 0.5f && modelResult.categoryId != null) {
+                        matchedCount++
+                        modelUsed = true
+                        return@map tx.copy(
+                            categoryId = modelResult.categoryId,
+                            note = cleanCategoryFromNote(note, catName)
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
 
-            updatedCount++
-            tx.copy(categoryId = catId, note = cleanedNote)
+            // ── 策略 5: 直接创建为独立分类 ──
+            val newCat = CategoryEntity(
+                name = catName, type = when (tx.type) {
+                    "INCOME" -> "INCOME"; else -> "EXPENSE"
+                }, icon = null
+            )
+            val newId = categoryDao.insert(newCat)
+            createdCats.add(newCat.copy(id = newId))
+            matchedCount++
+            tx.copy(
+                categoryId = newId,
+                note = cleanCategoryFromNote(note, catName)
+            )
         }
 
-        return if (updatedCount > 0) {
-            val catsCreated = createdCats.size
-            val extraMsg = if (catsCreated > 0) "，新建 $catsCreated 个分类" else ""
-            preview.copy(
-                transactions = enriched,
-                message = preview.message + extraMsg
-            )
+        return if (matchedCount > 0) {
+            val created = createdCats.size
+            val extra = buildString {
+                if (created > 0) append("，新建 $created 个分类")
+                if (modelUsed) append("，AI辅助分类")
+            }
+            preview.copy(transactions = enriched, message = preview.message + extra)
         } else preview
+    }
+
+    /** 从 note 中移除 "分类:xxx" 前缀 */
+    private fun cleanCategoryFromNote(note: String, catName: String): String? {
+        return note
+            .replace(Regex("""\s*\|\s*分类:$catName"""), "")
+            .replace(Regex("""分类:$catName\s*\|\s*"""), "")
+            .replace("分类:$catName", "")
+            .trim()
+            .takeIf { it.isNotBlank() }
     }
 
     /** 尝试 JSON 数组解析（钱迹等 App 的导出格式） */
