@@ -67,7 +67,7 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
 
             SettingsItem(
-                icon = Icons.Default.FileDownload,
+                icon = Icons.Default.Download,
                 title = "导入/导出",
                 subtitle = "导出为 JSON 或 Excel 文件，或从文件恢复数据",
                 onClick = onNavigateToExportImport

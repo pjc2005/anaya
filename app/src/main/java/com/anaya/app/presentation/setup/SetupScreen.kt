@@ -11,7 +11,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -26,13 +25,6 @@ fun SetupScreen(
     viewModel: SetupViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
-    val context = LocalContext.current
-
-    LaunchedEffect(state.isCompleting, state.currentStep) {
-        if (state.currentStep == SetupStep.COMPLETE && state.isCompleting) {
-            onSetupComplete()
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -117,7 +109,10 @@ fun SetupScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    onClick = { viewModel.completeSetup() },
+                    onClick = {
+                        viewModel.completeSetup()
+                        onSetupComplete()
+                    },
                     enabled = !state.isCompleting
                 ) {
                     if (state.isCompleting) {

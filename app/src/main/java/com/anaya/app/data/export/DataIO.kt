@@ -19,6 +19,7 @@ import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.apache.poi.ss.usermodel.*
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
@@ -113,8 +114,8 @@ class DataExportImport @Inject constructor(
                 return@withContext ExportResult(false, "没有可导出的交易记录")
             }
 
-            val accounts = accountDao.getAllAccountsSync()
-            val categories = categoryDao.getAllCategoriesSync()
+            val accounts = accountRepository.getAllAccounts().first()
+            val categories = categoryRepository.getAllCategories().first()
 
             val data = ExportData(
                 transactions = transactions,
@@ -513,14 +514,7 @@ class DataExportImport @Inject constructor(
             borderRight = BorderStyle.THIN
             setFont(workbook.createFont().apply { bold = true })
         }
-        val cellStyle = workbook.createCellStyle().apply {
-            borderBottom = BorderStyle.THIN
-            borderTop = BorderStyle.THIN
-            borderLeft = BorderStyle.THIN
-            borderRight = BorderStyle.THIN
-        }
-        val dateCellStyle = workbook.createCellStyle().apply {
-            dataFormat = workbook.createDataFormat().getFormat("yyyy-MM-dd HH:mm")
+        val dataStyle = workbook.createCellStyle().apply {
             borderBottom = BorderStyle.THIN
             borderTop = BorderStyle.THIN
             borderLeft = BorderStyle.THIN
@@ -534,10 +528,9 @@ class DataExportImport @Inject constructor(
         // 表头
         val headerRow = sheet.createRow(0)
         headers.forEachIndexed { i, h ->
-            headerRow.createCell(i).apply {
-                setCellValue(h)
-                cellStyle = headerStyle
-            }
+            val cell = headerRow.createCell(i)
+            cell.setCellValue(h)
+            cell.setCellStyle(headerStyle)
         }
 
         // 数据行
@@ -545,42 +538,36 @@ class DataExportImport @Inject constructor(
             val row = sheet.createRow(index + 1)
             row.createCell(0).apply {
                 setCellValue(dateFormat.format(Date(tx.date)))
-                cellStyle = cellStyle
+                setCellStyle(dataStyle)
             }
             row.createCell(1).apply {
-                setCellValue(tx.type.let { typeName ->
-                    when (typeName) {
-                        "EXPENSE" -> "支出"
-                        "INCOME" -> "收入"
-                        "TRANSFER" -> "转账"
-                        else -> typeName
-                    }
+                setCellValue(when (tx.type) {
+                    "EXPENSE" -> "支出"
+                    "INCOME" -> "收入"
+                    "TRANSFER" -> "转账"
+                    else -> tx.type
                 })
-                cellStyle = cellStyle
+                setCellStyle(dataStyle)
             }
             row.createCell(2).apply {
                 setCellValue(tx.amount / 100.0)
-                cellStyle = cellStyle
+                setCellStyle(dataStyle)
             }
             row.createCell(3).apply {
-                setCellValue(
-                    data.categories.find { it.id == tx.categoryId }?.name ?: "未分类"
-                )
-                cellStyle = cellStyle
+                setCellValue(data.categories.find { it.id == tx.categoryId }?.name ?: "未分类")
+                setCellStyle(dataStyle)
             }
             row.createCell(4).apply {
-                setCellValue(
-                    data.accounts.find { it.id == tx.accountId }?.name ?: "未知账户"
-                )
-                cellStyle = cellStyle
+                setCellValue(data.accounts.find { it.id == tx.accountId }?.name ?: "未知账户")
+                setCellStyle(dataStyle)
             }
             row.createCell(5).apply {
                 setCellValue(tx.note ?: "")
-                cellStyle = cellStyle
+                setCellStyle(dataStyle)
             }
             row.createCell(6).apply {
                 setCellValue(dateFormat.format(Date(tx.createdAt)))
-                cellStyle = cellStyle
+                setCellStyle(dataStyle)
             }
         }
 
@@ -593,14 +580,16 @@ class DataExportImport @Inject constructor(
             val acctHeaders = listOf("名称", "类型", "余额(元)", "初始金额(元)")
             val hRow = acctSheet.createRow(0)
             acctHeaders.forEachIndexed { i, h ->
-                hRow.createCell(i).apply { setCellValue(h); cellStyle = headerStyle }
+                val c = hRow.createCell(i)
+                c.setCellValue(h)
+                c.setCellStyle(headerStyle)
             }
             data.accounts.forEachIndexed { index, acct ->
                 val row = acctSheet.createRow(index + 1)
-                row.createCell(0).apply { setCellValue(acct.name); cellStyle = cellStyle }
-                row.createCell(1).apply { setCellValue(acct.type.name); cellStyle = cellStyle }
-                row.createCell(2).apply { setCellValue(acct.balance / 100.0); cellStyle = cellStyle }
-                row.createCell(3).apply { setCellValue(acct.initialBalance / 100.0); cellStyle = cellStyle }
+                row.createCell(0).apply { setCellValue(acct.name); setCellStyle(dataStyle) }
+                row.createCell(1).apply { setCellValue(acct.type.name); setCellStyle(dataStyle) }
+                row.createCell(2).apply { setCellValue(acct.balance / 100.0); setCellStyle(dataStyle) }
+                row.createCell(3).apply { setCellValue(acct.initialBalance / 100.0); setCellStyle(dataStyle) }
             }
             (0..3).forEach { acctSheet.autoSizeColumn(it) }
         }
@@ -611,16 +600,18 @@ class DataExportImport @Inject constructor(
             val catHeaders = listOf("名称", "类型", "图标")
             val hRow = catSheet.createRow(0)
             catHeaders.forEachIndexed { i, h ->
-                hRow.createCell(i).apply { setCellValue(h); cellStyle = headerStyle }
+                val c = hRow.createCell(i)
+                c.setCellValue(h)
+                c.setCellStyle(headerStyle)
             }
             data.categories.forEachIndexed { index, cat ->
                 val row = catSheet.createRow(index + 1)
-                row.createCell(0).apply { setCellValue(cat.name); cellStyle = cellStyle }
+                row.createCell(0).apply { setCellValue(cat.name); setCellStyle(dataStyle) }
                 row.createCell(1).apply {
                     setCellValue(if (cat.type.name == "EXPENSE") "支出" else "收入")
-                    cellStyle = cellStyle
+                    setCellStyle(dataStyle)
                 }
-                row.createCell(2).apply { setCellValue(cat.icon ?: ""); cellStyle = cellStyle }
+                row.createCell(2).apply { setCellValue(cat.icon ?: ""); setCellStyle(dataStyle) }
             }
             (0..2).forEach { catSheet.autoSizeColumn(it) }
         }
