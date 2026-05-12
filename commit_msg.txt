@@ -1,6 +1,0 @@
-Add delete transaction option with long-press
-
-- Long-press on any transaction card shows a confirmation dialog
-- Delete button (red) calls TransactionRepository.deleteById()
-- Replaced clickable with combinedClickable for dual tap/long-press
-- Removed unused imports
