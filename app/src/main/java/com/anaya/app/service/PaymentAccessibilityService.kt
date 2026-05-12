@@ -4,13 +4,10 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.content.Context
 import android.os.Build
-import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
@@ -19,20 +16,15 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 
 /**
- * 智能支付识别服务 — 参考"自动记账"的识别架构
+ * 支付检测服务 — 简化版
  *
- * 工作流程：
- * 1. 监听窗口变化事件
- * 2. 根据 event.packageName 判断支付平台
- * 3. 尝试 rootInActiveWindow 获取完整页面文本
- * 4. 若 root 为 null（国产手机常见限制），改用 event.text 降级识别
- * 5. 识别到支付完成后提取金额/商户，自动记账
+ * 核心逻辑：收到支付 App 的窗口变化事件 → 收集页面所有可见文本
+ * → 正则提取金额 → 有金额就自动记账。不依赖页面类型识别。
  */
 @AndroidEntryPoint
 class PaymentAccessibilityService : AccessibilityService() {
@@ -41,19 +33,9 @@ class PaymentAccessibilityService : AccessibilityService() {
     @Inject lateinit var eventBus: PaymentEventBus
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val recognizer = PlatformPageRecognizer()
 
-    /** 上次识别到的页面类型 */
-    private var lastPageType: PageType = PageType.UNKNOWN
-
-    /** 上次识别的时间戳（防重复触发） */
+    /** 上次触发时间（防重复） */
     private val lastCaptureTime = AtomicLong(0L)
-
-    /** 上次识别的平台（防重复触发） */
-    private var lastPlatformPkg: String = ""
-
-    /** 等待用户点击展开的页面类型队列 */
-    private var pendingPageType: PageType? = null
 
     /** 前台通知 ID */
     private val FOREGROUND_NOTIFY_ID = 1001
@@ -66,7 +48,8 @@ class PaymentAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        // 启动前台服务（防止国产 ROM 杀后台）
+
+        // 前台服务（防国产 ROM 杀后台）
         val fgNotification = NotificationCompat.Builder(this, "payment_detect")
             .setContentTitle("Anaya 支付检测运行中")
             .setContentText("自动识别微信、支付宝等支付信息")
@@ -80,7 +63,6 @@ class PaymentAccessibilityService : AccessibilityService() {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             notificationTimeout = 500
-            // 限定主流支付平台，减少国产 ROM 的事件过滤
             packageNames = arrayOf(
                 "com.tencent.mm",
                 "com.eg.android.AlipayGphone",
@@ -91,155 +73,87 @@ class PaymentAccessibilityService : AccessibilityService() {
                 "com.xunmeng.pinduoduo"
             )
         }
-        Log.i(TAG, "Service connected (foreground), monitoring payment apps")
+        Log.i(TAG, "Service connected (foreground)")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        // 只处理窗口切换事件（每个新页面触发一次，性能开销最小）
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val pkg = event.packageName?.toString() ?: return
-        val platform = Platform.fromPackage(pkg)
+        val platform = Platform.fromPackage(pkg) ?: return
 
-        // 非支付平台 → 跳过
-        if (platform == null) return
-
-        // 同平台防冲：200ms 内同一平台不重复处理
+        // 防重复：3 秒内同 App 不重复处理
         val now = System.currentTimeMillis()
-        if (pkg == lastPlatformPkg && now - lastCaptureTime.get() < 200) return
-        lastPlatformPkg = pkg
+        if (now - lastCaptureTime.get() < 3000) return
+        lastCaptureTime.set(now)
 
-        Log.d(TAG, "Window change: ${platform.label}, event text: ${event.text?.joinToString(" | ") ?: "(空)"}")
+        Log.d(TAG, "Window change: ${platform.label}")
 
-        // 尝试获取窗口内容（国产手机上可能返回 null）
+        // 收集页面文本
+        val text = collectPageText(event)
+        if (text.isBlank()) {
+            Log.d(TAG, "${platform.label}: page text is empty")
+            return
+        }
+
+        Log.d(TAG, "${platform.label}: text=${text.take(200)}")
+
+        // 直接解析支付信息（不判断页面类型）
+        scope.launch {
+            try {
+                val parsed = RuleBasedParser.parsePaymentText(text)
+                if (parsed.amount != null && parsed.amount > 0) {
+                    Log.i(TAG, "Payment detected: ${platform.label} ${parsed.merchant ?: ""} ${parsed.amount / 100.0}元")
+
+                    val enriched = parsed.copy(
+                        note = parsed.note ?: "[${platform.label}]",
+                        confidence = parsed.confidence.coerceAtLeast(0.6f)
+                    )
+                    eventBus.emit(enriched)
+
+                    showNotification(
+                        "已自动记账 [${platform.label}]",
+                        "${parsed.merchant ?: ""} ${"%.2f元".format(parsed.amount / 100.0)}"
+                    )
+                } else {
+                    Log.d(TAG, "${platform.label}: no amount found in page text")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Parse failed", e)
+            }
+        }
+    }
+
+    /**
+     * 收集页面上所有可见文本
+     * 优先使用 rootInActiveWindow，不可用时回退到 event.text
+     */
+    private fun collectPageText(event: AccessibilityEvent): String {
         val root = rootInActiveWindow
-        val result: PageRecognition
-
         if (root != null) {
             try {
-                result = recognizer.recognize(root, platform)
+                val texts = mutableListOf<String>()
+                collectText(root, texts)
+                if (texts.isNotEmpty()) return texts.joinToString("\n")
             } catch (e: Exception) {
-                Log.e(TAG, "Recognize from root failed", e)
-                return
+                Log.w(TAG, "collectText from root failed", e)
             } finally {
                 recycleNode(root)
             }
-        } else {
-            // rootInActiveWindow = null（MIUI/HarmonyOS/ColorOS 常见）
-            // 使用 event.text 做降级识别
-            Log.d(TAG, "rootInActiveWindow is null, using event text fallback")
-            val eventText = event.text.joinToString("")
-            val eventDesc = event.contentDescription?.toString() ?: ""
-            result = recognizer.lightRecognize(platform, eventText, eventDesc)
         }
-
-        Log.d(TAG, "Recognition: ${platform.label} → ${result.pageType.label} (conf=${result.confidence})")
-
-        // 跳过未知页面
-        if (result.pageType == PageType.UNKNOWN) {
-            lastPageType = PageType.UNKNOWN
-            return
-        }
-
-        when (result.pageType) {
-            PageType.ALL_ORDER_INFO,
-            PageType.PAYMENT_METHOD -> {
-                pendingPageType = result.pageType
-                lastPageType = result.pageType
-            }
-
-            PageType.PAYMENT_COMPLETE,
-            PageType.RED_PACKET,
-            PageType.TRANSFER,
-            PageType.ORDER_DETAIL -> {
-                // 有 pending 标记时走延迟捕获
-                if (result.pageType == PageType.ORDER_DETAIL && pendingPageType != null) {
-                    launchDelayedCapture(platform)
-                    pendingPageType = null
-                } else {
-                    capturePayment(result)
-                }
-            }
-
-            PageType.WALLET_BILL -> capturePayment(result)
-
-            PageType.UNKNOWN -> { /* ignore */ }
-        }
-
-        lastPageType = result.pageType
+        // root 不可用时用 event.text
+        val eventText = event.text?.joinToString(" ") ?: ""
+        val eventDesc = event.contentDescription?.toString() ?: ""
+        return "$eventText $eventDesc".trim()
     }
 
-    /**
-     * 捕获支付数据
-     */
-    private fun capturePayment(result: PageRecognition) {
-        // 防重复：2秒内同平台不重复触发
-        val now = System.currentTimeMillis()
-        if (now - lastCaptureTime.get() < 2000) return
-        lastCaptureTime.set(now)
-
-        val pageText = result.pageText
-        if (pageText.isBlank()) {
-            Log.w(TAG, "Page text is blank, cannot extract payment info")
-            return
-        }
-
-        scope.launch {
-            try {
-                // 1. 先用规则解析器快速提取
-                val parsed = RuleBasedParser.parsePaymentText(pageText)
-                Log.d(TAG, "Rule parse: amount=${parsed.amount}, merchant=${parsed.merchant}, conf=${parsed.confidence}")
-
-                // 2. 如果有本地模型，用模型做二次精确解析
-                val finalParsed = if (localModel.isModelLoaded() && parsed.confidence < 0.8f) {
-                    val mlResult = localModel.parsePaymentText(pageText)
-                    if (mlResult.confidence > parsed.confidence) mlResult else parsed
-                } else parsed
-
-                if (finalParsed.amount != null || finalParsed.merchant != null) {
-                    val resultWithPlatform = finalParsed.copy(
-                        note = finalParsed.note
-                            ?: "[${result.platform?.label}][${result.pageType.label}]"
-                    )
-                    eventBus.emit(resultWithPlatform)
-
-                    val amountStr = finalParsed.amount?.let {
-                        "%.2f元".format(it / 100.0)
-                    } ?: ""
-                    val merchantStr = finalParsed.merchant ?: ""
-                    Log.i(TAG, "Auto-saved: ${result.platform?.label} $merchantStr $amountStr")
-                    showNotification(
-                        "已自动记账 [${result.platform?.label}]",
-                        "$merchantStr $amountStr"
-                    )
-                } else {
-                    Log.w(TAG, "No amount/merchant extracted from: ${pageText.take(100)}")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "capturePayment failed", e)
-            }
-        }
-    }
-
-    /**
-     * 延迟捕获 — 用于用户展开详情后的页面
-     * 等页面加载完（1.5s）再抓取
-     */
-    private fun launchDelayedCapture(platform: Platform) {
-        scope.launch {
-            delay(1500)
-            val newRoot = rootInActiveWindow
-            if (newRoot != null) {
-                try {
-                    val result = recognizer.recognize(newRoot, platform)
-                    if (result.pageType == PageType.ORDER_DETAIL ||
-                        result.pageType == PageType.PAYMENT_COMPLETE) {
-                        capturePayment(result)
-                    }
-                } finally {
-                    recycleNode(newRoot)
-                }
-            }
+    private fun collectText(node: AccessibilityNodeInfo, result: MutableList<String>) {
+        val text = node.text?.toString()?.takeIf { it.isNotBlank() }
+        val desc = node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        if (text != null) result.add(text)
+        if (desc != null) result.add(desc)
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { collectText(it, result) }
         }
     }
 
