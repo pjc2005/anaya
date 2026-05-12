@@ -5,6 +5,7 @@ data class Account(
     val name: String,
     val type: AccountType = AccountType.CASH,
     val initialBalance: Long = 0,
+    val balance: Long = 0,
     val color: Int? = null,
     val sortOrder: Int = 0,
     val archived: Boolean = false

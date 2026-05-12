@@ -41,13 +41,15 @@ fun TransactionEditorScreen(
     val categories by viewModel.filteredCategories.collectAsStateWithLifecycle()
     val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
 
-    var showAccountPicker by remember { mutableStateOf(false) }
+    var showSourcePicker by remember { mutableStateOf(false) }
+    var showTargetPicker by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.saveState) {
         if (state.saveState == SaveState.IDLE && !state.isEditing
-            && state.amountDisplay != "0" && state.selectedCategory != null) {
+            && state.amountDisplay != "0"
+            && (state.transactionType == TransactionType.TRANSFER || state.selectedCategory != null)) {
             onNavigateBack()
         }
     }
@@ -73,7 +75,10 @@ fun TransactionEditorScreen(
                     }
                     TextButton(
                         onClick = { viewModel.save() },
-                        enabled = state.amountDisplay != "0" && state.selectedCategory != null
+                        enabled = state.amountDisplay != "0" && (
+                            state.transactionType == TransactionType.TRANSFER ||
+                            state.selectedCategory != null
+                        )
                     ) {
                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
@@ -109,7 +114,7 @@ fun TransactionEditorScreen(
             HorizontalDivider()
             Spacer(Modifier.height(8.dp))
 
-            // ── Account Selector ──
+            // ── Source Account / 转出账户 ──
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -117,13 +122,23 @@ fun TransactionEditorScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("账户", style = MaterialTheme.typography.labelLarge)
-                TextButton(onClick = { showAccountPicker = true }) {
+                Text(
+                    if (state.transactionType == TransactionType.TRANSFER) "转出账户"
+                    else "账户",
+                    style = MaterialTheme.typography.labelLarge
+                )
+                TextButton(onClick = {
+                    viewModel.setAccountPickerMode(AccountPickerMode.SOURCE)
+                    showSourcePicker = true
+                }) {
                     Text(state.selectedAccount?.name ?: "选择账户")
-                    Text(state.selectedAccount?.let { "  ¥${it.initialBalance / 100}" } ?: "")
+                    state.selectedAccount?.let {
+                        Text("  ¥${it.balance / 100}")
+                    }
                 }
             }
 
+            // ── Target Account / 转入账户 ──
             if (state.transactionType == TransactionType.TRANSFER) {
                 Row(
                     modifier = Modifier
@@ -133,8 +148,14 @@ fun TransactionEditorScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("转入账户", style = MaterialTheme.typography.labelLarge)
-                    TextButton(onClick = { showAccountPicker = true }) {
+                    TextButton(onClick = {
+                        viewModel.setAccountPickerMode(AccountPickerMode.TARGET)
+                        showTargetPicker = true
+                    }) {
                         Text(state.targetAccount?.name ?: "选择转入账户")
+                        state.targetAccount?.let {
+                            Text("  ¥${it.balance / 100}")
+                        }
                     }
                 }
             }
@@ -164,31 +185,33 @@ fun TransactionEditorScreen(
                 singleLine = true
             )
 
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "分类",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
-            Spacer(Modifier.height(8.dp))
+            // ── Category (only for non-transfer) ──
+            if (state.transactionType != TransactionType.TRANSFER) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "分类",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(Modifier.height(8.dp))
 
-            // ── Category Grid ──
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 320.dp)
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                userScrollEnabled = false
-            ) {
-                items(categories, key = { it.id }) { category ->
-                    CategoryItem(
-                        category = category,
-                        isSelected = state.selectedCategory?.id == category.id,
-                        onClick = { viewModel.onCategorySelected(category) }
-                    )
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(4),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    userScrollEnabled = false
+                ) {
+                    items(categories, key = { it.id }) { category ->
+                        CategoryItem(
+                            category = category,
+                            isSelected = state.selectedCategory?.id == category.id,
+                            onClick = { viewModel.onCategorySelected(category) }
+                        )
+                    }
                 }
             }
 
@@ -196,38 +219,29 @@ fun TransactionEditorScreen(
         }
     }
 
-    // ── Account Picker Dialog ──
-    if (showAccountPicker) {
-        AlertDialog(
-            onDismissRequest = { showAccountPicker = false },
-            title = { Text("选择账户") },
-            text = {
-                Column {
-                    accounts.forEach { account ->
-                        val icon = when (account.type) {
-                            AccountType.CASH -> "💵"
-                            AccountType.BANK -> "🏦"
-                            AccountType.CREDIT_CARD -> "💳"
-                            AccountType.ALIPAY -> "🔵"
-                            AccountType.WECHAT -> "💚"
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    viewModel.onAccountSelected(account)
-                                    showAccountPicker = false
-                                }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("$icon  ${account.name}", modifier = Modifier.weight(1f))
-                            Text("¥${account.initialBalance / 100}", color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
+    // ── Source Account Picker Dialog ──
+    if (showSourcePicker) {
+        AccountPickerDialog(
+            title = "选择${if (state.transactionType == TransactionType.TRANSFER) "转出" else ""}账户",
+            accounts = accounts,
+            onSelect = { account ->
+                viewModel.onAccountSelected(account)
+                showSourcePicker = false
             },
-            confirmButton = { TextButton(onClick = { showAccountPicker = false }) { Text("取消") } }
+            onDismiss = { showSourcePicker = false }
+        )
+    }
+
+    // ── Target Account Picker Dialog ──
+    if (showTargetPicker) {
+        AccountPickerDialog(
+            title = "选择转入账户",
+            accounts = accounts.filter { it.id != state.selectedAccount?.id },
+            onSelect = { account ->
+                viewModel.onAccountSelected(account)
+                showTargetPicker = false
+            },
+            onDismiss = { showTargetPicker = false }
         )
     }
 
@@ -301,7 +315,7 @@ private fun TypeSelector(selected: TransactionType, onSelected: (TransactionType
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        TransactionType.entries.filter { it != TransactionType.TRANSFER }.forEach { type ->
+        TransactionType.entries.forEach { type ->
             FilterChip(
                 selected = selected == type,
                 onClick = { onSelected(type) },
@@ -310,21 +324,62 @@ private fun TypeSelector(selected: TransactionType, onSelected: (TransactionType
                         when (type) {
                             TransactionType.EXPENSE -> "支出"
                             TransactionType.INCOME -> "收入"
-                            else -> "转账"
+                            TransactionType.TRANSFER -> "转账"
                         }
                     )
                 },
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = if (type == TransactionType.EXPENSE)
-                        MaterialTheme.colorScheme.errorContainer
-                    else MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = if (type == TransactionType.EXPENSE)
-                        MaterialTheme.colorScheme.onErrorContainer
-                    else MaterialTheme.colorScheme.onPrimaryContainer
+                    selectedContainerColor = when (type) {
+                        TransactionType.EXPENSE -> MaterialTheme.colorScheme.errorContainer
+                        TransactionType.INCOME -> MaterialTheme.colorScheme.primaryContainer
+                        TransactionType.TRANSFER -> MaterialTheme.colorScheme.tertiaryContainer
+                    },
+                    selectedLabelColor = when (type) {
+                        TransactionType.EXPENSE -> MaterialTheme.colorScheme.onErrorContainer
+                        TransactionType.INCOME -> MaterialTheme.colorScheme.onPrimaryContainer
+                        TransactionType.TRANSFER -> MaterialTheme.colorScheme.onTertiaryContainer
+                    }
                 )
             )
         }
     }
+}
+
+@Composable
+private fun AccountPickerDialog(
+    title: String,
+    accounts: List<com.anaya.app.domain.model.Account>,
+    onSelect: (com.anaya.app.domain.model.Account) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                accounts.forEach { account ->
+                    val icon = when (account.type) {
+                        AccountType.CASH -> "💵"
+                        AccountType.BANK -> "🏦"
+                        AccountType.CREDIT_CARD -> "💳"
+                        AccountType.ALIPAY -> "🔵"
+                        AccountType.WECHAT -> "💚"
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(account) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("$icon  ${account.name}", modifier = Modifier.weight(1f))
+                        Text("¥${account.balance / 100}", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 @Composable
@@ -371,10 +426,11 @@ private fun NumberPad(
         ) {
             NumButton(text = ".", onClick = onDecimal)
             NumButton(text = "0", onClick = { onDigit(0) })
-            NumButton(text = "⌫", onClick = onDelete)
+            NumButton(text = "\u232B", onClick = onDelete)
         }
     }
 }
+
 @Composable
 private fun RowScope.NumButton(text: String, onClick: () -> Unit) {
     Box(

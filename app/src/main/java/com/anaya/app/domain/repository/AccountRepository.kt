@@ -13,4 +13,6 @@ interface AccountRepository {
     suspend fun update(account: Account)
 
     suspend fun delete(account: Account)
+
+    suspend fun updateBalance(id: Long, newBalance: Long)
 }

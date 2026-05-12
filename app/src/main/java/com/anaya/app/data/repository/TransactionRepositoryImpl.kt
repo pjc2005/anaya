@@ -1,5 +1,6 @@
 package com.anaya.app.data.repository
 
+import com.anaya.app.data.local.dao.AccountDao
 import com.anaya.app.data.local.dao.TransactionDao
 import com.anaya.app.data.mapper.toDomain
 import com.anaya.app.data.mapper.toEntity
@@ -13,7 +14,8 @@ import javax.inject.Singleton
 
 @Singleton
 class TransactionRepositoryImpl @Inject constructor(
-    private val transactionDao: TransactionDao
+    private val transactionDao: TransactionDao,
+    private val accountDao: AccountDao
 ) : TransactionRepository {
 
     override fun getAllTransactions(): Flow<List<Transaction>> {
@@ -42,18 +44,78 @@ class TransactionRepositoryImpl @Inject constructor(
     }
 
     override suspend fun insert(transaction: Transaction): Long {
-        return transactionDao.insert(transaction.toEntity())
+        val id = transactionDao.insert(transaction.toEntity())
+        // Update account balances
+        updateBalancesForInsert(transaction)
+        return id
     }
 
     override suspend fun update(transaction: Transaction) {
-        transactionDao.update(transaction.toEntity())
+        // Revert old balances, then apply new ones
+        val oldTx = transactionDao.getTransactionById(transaction.id)?.toDomain()
+        if (oldTx != null) {
+            val newTx = transaction.copy(id = oldTx.id)
+            revertBalancesForDelete(oldTx)
+            transactionDao.update(newTx.toEntity())
+            updateBalancesForInsert(newTx)
+        } else {
+            transactionDao.update(transaction.toEntity())
+            updateBalancesForInsert(transaction)
+        }
     }
 
     override suspend fun delete(transaction: Transaction) {
+        revertBalancesForDelete(transaction)
         transactionDao.delete(transaction.toEntity())
     }
 
     override suspend fun deleteById(id: Long) {
+        val tx = transactionDao.getTransactionById(id)?.toDomain() ?: return
+        revertBalancesForDelete(tx)
         transactionDao.deleteById(id)
+    }
+
+    private suspend fun updateBalancesForInsert(tx: Transaction) {
+        when (tx.type) {
+            TransactionType.INCOME -> {
+                val account = accountDao.getAccountById(tx.accountId) ?: return
+                accountDao.updateBalance(tx.accountId, account.balance + tx.amount)
+            }
+            TransactionType.EXPENSE -> {
+                val account = accountDao.getAccountById(tx.accountId) ?: return
+                accountDao.updateBalance(tx.accountId, account.balance - tx.amount)
+            }
+            TransactionType.TRANSFER -> {
+                // Source: decrease
+                val source = accountDao.getAccountById(tx.accountId) ?: return
+                accountDao.updateBalance(tx.accountId, source.balance - tx.amount)
+                // Target: increase
+                val targetId = tx.targetAccountId ?: return
+                val target = accountDao.getAccountById(targetId) ?: return
+                accountDao.updateBalance(targetId, target.balance + tx.amount)
+            }
+        }
+    }
+
+    private suspend fun revertBalancesForDelete(tx: Transaction) {
+        when (tx.type) {
+            TransactionType.INCOME -> {
+                val account = accountDao.getAccountById(tx.accountId) ?: return
+                accountDao.updateBalance(tx.accountId, account.balance - tx.amount)
+            }
+            TransactionType.EXPENSE -> {
+                val account = accountDao.getAccountById(tx.accountId) ?: return
+                accountDao.updateBalance(tx.accountId, account.balance + tx.amount)
+            }
+            TransactionType.TRANSFER -> {
+                // Source: increase back
+                val source = accountDao.getAccountById(tx.accountId) ?: return
+                accountDao.updateBalance(tx.accountId, source.balance + tx.amount)
+                // Target: decrease back
+                val targetId = tx.targetAccountId ?: return
+                val target = accountDao.getAccountById(targetId) ?: return
+                accountDao.updateBalance(targetId, target.balance - tx.amount)
+            }
+        }
     }
 }

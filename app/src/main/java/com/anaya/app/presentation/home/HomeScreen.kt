@@ -131,18 +131,28 @@ fun HomeScreen(
                                 Text(tx.categoryIcon, fontSize = MaterialTheme.typography.titleLarge.fontSize)
                                 Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(tx.categoryName, fontWeight = FontWeight.Medium)
                                     Text(
-                                        tx.note ?: dateFormat.format(Date(tx.date)),
+                                        if (tx.type == TransactionType.TRANSFER) "转账" else tx.categoryName,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        tx.note
+                                            ?: if (tx.type == TransactionType.TRANSFER) tx.categoryName else dateFormat.format(Date(tx.date)),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 Text(
-                                    "${if (tx.type == TransactionType.INCOME) "+" else "-"}¥%,.2f".format(tx.amount / 100.0),
-                                    color = if (tx.type == TransactionType.INCOME)
-                                        MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.error,
+                                    when (tx.type) {
+                                        TransactionType.INCOME -> "+¥%,.2f".format(tx.amount / 100.0)
+                                        TransactionType.EXPENSE -> "-¥%,.2f".format(tx.amount / 100.0)
+                                        TransactionType.TRANSFER -> "¥%,.2f".format(tx.amount / 100.0)
+                                    },
+                                    color = when (tx.type) {
+                                        TransactionType.INCOME -> MaterialTheme.colorScheme.primary
+                                        TransactionType.EXPENSE -> MaterialTheme.colorScheme.error
+                                        TransactionType.TRANSFER -> MaterialTheme.colorScheme.tertiary
+                                    },
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }

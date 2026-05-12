@@ -2,9 +2,11 @@ package com.anaya.app.presentation.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.anaya.app.domain.model.Account
 import com.anaya.app.domain.model.Category
 import com.anaya.app.domain.model.Transaction
 import com.anaya.app.domain.model.TransactionType
+import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.domain.repository.TransactionRepository
 import com.anaya.app.util.getMonthEndMillis
@@ -36,7 +38,8 @@ data class TransactionDisplay(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val transactionRepository: TransactionRepository,
-    private val categoryRepository: CategoryRepository
+    private val categoryRepository: CategoryRepository,
+    private val accountRepository: AccountRepository
 ) : ViewModel() {
 
     private val now = Calendar.getInstance()
@@ -50,22 +53,35 @@ class HomeViewModel @Inject constructor(
     private val categories: StateFlow<List<Category>> = categoryRepository.getAllCategories()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val accounts: StateFlow<List<Account>> = accountRepository.getAllAccounts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val uiState: StateFlow<HomeUiState> = combine(
         transactionRepository.getTransactionsByDateRange(monthStart, monthEnd),
         transactionRepository.getAllTransactions().map { list -> list.take(5) },
-        categories
-    ) { monthTx, recentTx, cats ->
+        categories,
+        accounts
+    ) { monthTx, recentTx, cats, accts ->
+        // 转账不计入收支统计
         val income = monthTx.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
         val expense = monthTx.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
 
         val recentDisplays = recentTx.map { tx ->
             val category = cats.find { it.id == tx.categoryId }
+            val account = accts.find { it.id == tx.accountId }
+            val targetAccount = tx.targetAccountId?.let { accts.find { a -> a.id == it } }
+            val isTransfer = tx.type == TransactionType.TRANSFER
             TransactionDisplay(
                 id = tx.id,
                 amount = tx.amount,
                 type = tx.type,
-                categoryName = category?.name ?: "未分类",
-                categoryIcon = category?.icon ?: "📄",
+                categoryName = if (isTransfer) {
+                    targetAccount?.let { "${account?.name ?: "?"} → ${it.name}" }
+                        ?: "转账"
+                } else {
+                    category?.name ?: "未分类"
+                },
+                categoryIcon = if (isTransfer) "🔄" else (category?.icon ?: "📄"),
                 note = tx.note,
                 date = tx.date
             )

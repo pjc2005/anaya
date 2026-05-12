@@ -52,7 +52,7 @@ class AccountEditorViewModel @Inject constructor(
                     it.copy(
                         name = account.name,
                         type = account.type,
-                        balanceDisplay = CurrencyUtils.centsToDisplayString(account.initialBalance),
+                        balanceDisplay = CurrencyUtils.centsToDisplayString(account.balance),
                         isLoading = false
                     )
                 }

@@ -19,6 +19,8 @@ import javax.inject.Inject
 
 enum class SaveState { IDLE, LOADING, ERROR }
 
+enum class AccountPickerMode { SOURCE, TARGET }
+
 data class EditorUiState(
     val transactionType: TransactionType = TransactionType.EXPENSE,
     val amountDisplay: String = "0",
@@ -29,7 +31,8 @@ data class EditorUiState(
     val selectedDate: Long = System.currentTimeMillis(),
     val isEditing: Boolean = false,
     val saveState: SaveState = SaveState.IDLE,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val accountPickerMode: AccountPickerMode = AccountPickerMode.SOURCE
 )
 
 @HiltViewModel
@@ -61,7 +64,7 @@ class TransactionEditorViewModel @Inject constructor(
         when (state.transactionType) {
             TransactionType.EXPENSE -> cats.filter { it.type == CategoryType.EXPENSE }
             TransactionType.INCOME -> cats.filter { it.type == CategoryType.INCOME }
-            TransactionType.TRANSFER -> cats.filter { it.type == CategoryType.EXPENSE }
+            TransactionType.TRANSFER -> emptyList() // 转账不需要分类
         }.sortedBy { it.sortOrder }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -144,7 +147,7 @@ class TransactionEditorViewModel @Inject constructor(
 
     fun onTypeSelected(type: TransactionType) {
         _uiState.update {
-            it.copy(transactionType = type, selectedCategory = null)
+            it.copy(transactionType = type, selectedCategory = null, targetAccount = null)
         }
     }
 
@@ -153,11 +156,21 @@ class TransactionEditorViewModel @Inject constructor(
     }
 
     fun onAccountSelected(account: Account) {
-        _uiState.update { it.copy(selectedAccount = account) }
+        val mode = _uiState.value.accountPickerMode
+        _uiState.update {
+            when (mode) {
+                AccountPickerMode.SOURCE -> it.copy(selectedAccount = account)
+                AccountPickerMode.TARGET -> it.copy(targetAccount = account)
+            }
+        }
     }
 
     fun onTargetAccountSelected(account: Account) {
         _uiState.update { it.copy(targetAccount = account) }
+    }
+
+    fun setAccountPickerMode(mode: AccountPickerMode) {
+        _uiState.update { it.copy(accountPickerMode = mode) }
     }
 
     fun onNoteChanged(note: String) {
@@ -187,6 +200,20 @@ class TransactionEditorViewModel @Inject constructor(
         if (state.transactionType == TransactionType.TRANSFER && state.targetAccount == null) {
             _uiState.update {
                 it.copy(saveState = SaveState.ERROR, errorMessage = "请选择转入账户")
+            }
+            return
+        }
+        if (state.transactionType == TransactionType.TRANSFER
+            && state.selectedAccount?.id == state.targetAccount?.id) {
+            _uiState.update {
+                it.copy(saveState = SaveState.ERROR, errorMessage = "转出和转入账户不能相同")
+            }
+            return
+        }
+        // 转账不需要分类，非转账需要分类
+        if (state.transactionType != TransactionType.TRANSFER && state.selectedCategory == null) {
+            _uiState.update {
+                it.copy(saveState = SaveState.ERROR, errorMessage = "请选择分类")
             }
             return
         }
