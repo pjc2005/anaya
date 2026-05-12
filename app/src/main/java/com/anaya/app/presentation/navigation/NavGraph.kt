@@ -9,6 +9,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.anaya.app.presentation.budget.BudgetScreen
 import com.anaya.app.presentation.home.HomeScreen
+import com.anaya.app.presentation.account.AccountEditorScreen
 import com.anaya.app.presentation.settings.AccountManagerScreen
 import com.anaya.app.presentation.settings.CategoryManagerScreen
 import com.anaya.app.presentation.settings.SettingsScreen
@@ -93,6 +94,23 @@ fun NavGraph(
 
         composable(Screen.AccountManager.route) {
             AccountManagerScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onAccountClick = { id ->
+                    navController.navigate("account/editor?accountId=$id")
+                }
+            )
+        }
+
+        composable(
+            route = "account/editor?accountId={accountId}",
+            arguments = listOf(
+                navArgument("accountId") {
+                    type = NavType.LongType
+                    defaultValue = 0L
+                }
+            )
+        ) {
+            AccountEditorScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }

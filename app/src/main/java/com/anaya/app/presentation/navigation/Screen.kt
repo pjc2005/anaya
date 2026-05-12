@@ -73,6 +73,11 @@ sealed class Screen(
         label = "设置向导"
     )
 
+    data object AccountEditor : Screen(
+        route = "account/editor?accountId={accountId}",
+        label = "编辑账户"
+    )
+
     companion object {
         val bottomNavItems = listOf(Home, Transactions, Stats, Budget, Settings)
     }

@@ -1,6 +1,8 @@
 package com.anaya.app.presentation.settings
 
 import com.anaya.app.util.CurrencyUtils
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -28,10 +30,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.anaya.app.domain.model.Account
 import com.anaya.app.domain.model.AccountType
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun AccountManagerScreen(
     onNavigateBack: () -> Unit = {},
+    onAccountClick: (Long) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
@@ -87,9 +90,13 @@ fun AccountManagerScreen(
                 }
             } else {
                 items(activeAccounts, key = { it.id }) { account ->
-                    AccountCard(account = account, onToggleArchive = {
-                        viewModel.toggleAccountArchived(account)
-                    })
+                    AccountCard(
+                        account = account,
+                        onClick = { onAccountClick(account.id) },
+                        onToggleArchive = {
+                            viewModel.toggleAccountArchived(account)
+                        }
+                    )
                 }
                 if (archivedAccounts.isNotEmpty()) {
                     item {
@@ -101,9 +108,14 @@ fun AccountManagerScreen(
                         )
                     }
                     items(archivedAccounts, key = { it.id }) { account ->
-                        AccountCard(account = account, onToggleArchive = {
-                            viewModel.toggleAccountArchived(account)
-                        }, archived = true)
+                        AccountCard(
+                            account = account,
+                            onClick = { onAccountClick(account.id) },
+                            onToggleArchive = {
+                                viewModel.toggleAccountArchived(account)
+                            },
+                            archived = true
+                        )
                     }
                 }
             }
@@ -183,10 +195,11 @@ fun AccountManagerScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun AccountCard(
     account: Account,
+    onClick: () -> Unit,
     onToggleArchive: () -> Unit,
     archived: Boolean = false
 ) {
@@ -216,7 +229,12 @@ private fun AccountCard(
         }
     ) {
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onToggleArchive
+                ),
             colors = if (archived) CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             ) else CardDefaults.cardColors()
