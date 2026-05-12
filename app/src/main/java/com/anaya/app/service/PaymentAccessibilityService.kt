@@ -4,10 +4,13 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
@@ -52,6 +55,9 @@ class PaymentAccessibilityService : AccessibilityService() {
     /** 等待用户点击展开的页面类型队列 */
     private var pendingPageType: PageType? = null
 
+    /** 前台通知 ID */
+    private val FOREGROUND_NOTIFY_ID = 1001
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -60,14 +66,32 @@ class PaymentAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        // 不设置 packageNames 过滤器：国产 ROM 上过滤可能导致事件丢失
-        // 所有 App 的 TYPE_WINDOW_STATE_CHANGED 都会送达，我们在代码里过滤
+        // 启动前台服务（防止国产 ROM 杀后台）
+        val fgNotification = NotificationCompat.Builder(this, "payment_detect")
+            .setContentTitle("Anaya 支付检测运行中")
+            .setContentText("自动识别微信、支付宝等支付信息")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        startForeground(FOREGROUND_NOTIFY_ID, fgNotification)
+
         serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             notificationTimeout = 500
+            // 限定主流支付平台，减少国产 ROM 的事件过滤
+            packageNames = arrayOf(
+                "com.tencent.mm",
+                "com.eg.android.AlipayGphone",
+                "com.unionpay",
+                "com.jingdong.app.mall",
+                "com.sankuai.meituan",
+                "com.ss.android.ugc.aweme",
+                "com.xunmeng.pinduoduo"
+            )
         }
-        Log.i(TAG, "Service connected, monitoring all window changes")
+        Log.i(TAG, "Service connected (foreground), monitoring payment apps")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
