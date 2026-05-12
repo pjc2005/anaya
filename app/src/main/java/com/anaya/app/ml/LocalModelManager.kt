@@ -6,6 +6,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -16,6 +18,21 @@ class LocalModelManager @Inject constructor(
 
     private var isLoaded = false
     private var nativeAvailable = false
+    private var serverAvailable = false
+
+    companion object {
+        private const val LOCAL_SERVER_URL = "http://192.168.0.113:8081/v1/chat/completions"
+    }
+
+    init {
+        try {
+            System.loadLibrary("llama")
+            nativeAvailable = true
+            Log.i("LocalModel", "Native llama.cpp library loaded")
+        } catch (e: UnsatisfiedLinkError) {
+            Log.i("LocalModel", "Native library not available, will use network/rule fallback: ${e.message}")
+        }
+    }
 
     private external fun nativeLoadModel(modelPath: String): Boolean
     private external fun nativeUnloadModel()
@@ -62,7 +79,13 @@ class LocalModelManager @Inject constructor(
                 LLMResponseParser.parseTransactionJson(result)
                     ?: RuleBasedParser.parsePaymentText(rawText)
             } else {
-                RuleBasedParser.parsePaymentText(rawText)
+                val networkResult = networkInference(buildPrompt("parse", rawText), 128)
+                if (networkResult != null) {
+                    LLMResponseParser.parseTransactionJson(networkResult)
+                        ?: RuleBasedParser.parsePaymentText(rawText)
+                } else {
+                    RuleBasedParser.parsePaymentText(rawText)
+                }
             }
         }
     }
@@ -74,18 +97,24 @@ class LocalModelManager @Inject constructor(
         existingCategories: List<String>
     ): ClassificationResult {
         return withContext(Dispatchers.Default) {
+            val input = buildString {
+                append("Merchant: $merchant\n")
+                append("Note: $note\n")
+                append("Amount: ${amount?.let { "%.2f".format(it / 100.0) } ?: "unknown"}\n")
+                append("Available: ${existingCategories.joinToString(", ")}")
+            }
             if (isLoaded && nativeAvailable) {
-                val input = buildString {
-                    append("Merchant: $merchant\n")
-                    append("Note: $note\n")
-                    append("Amount: ${amount?.let { "%.2f".format(it / 100.0) } ?: "unknown"}\n")
-                    append("Available: ${existingCategories.joinToString(", ")}")
-                }
                 val result = nativeInference(buildPrompt("classify", input), 64)
                 LLMResponseParser.parseClassificationJson(result)
                     ?: RuleBasedClassifier.classify(merchant, note)
             } else {
-                RuleBasedClassifier.classify(merchant, note)
+                val networkResult = networkInference(buildPrompt("classify", input), 64)
+                if (networkResult != null) {
+                    LLMResponseParser.parseClassificationJson(networkResult)
+                        ?: RuleBasedClassifier.classify(merchant, note)
+                } else {
+                    RuleBasedClassifier.classify(merchant, note)
+                }
             }
         }
     }
@@ -152,5 +181,35 @@ class LocalModelManager @Inject constructor(
             else -> ""
         }
         return "<|im_start|>system\n$sysMsg\n<|im_end|>\n<|im_start|>user\n$input\n<|im_end|>\n<|im_start|>assistant\n"
+    }
+
+    private fun networkInference(prompt: String, maxTokens: Int): String? {
+        return try {
+            val json = buildString {
+                append("""{"model":"qwen3.6-35b","messages":[{"role":"user","content":""")
+                append(prompt.replace("\"", "\\\"").replace("\n", "\\n"))
+                append(""""}],"max_tokens":$maxTokens,"temperature":0.3}""")
+            }
+            val url = URL(LOCAL_SERVER_URL)
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+            conn.connectTimeout = 10000
+            conn.readTimeout = 30000
+            conn.outputStream.write(json.toByteArray())
+            val resp = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+            // Extract content from {"choices":[{"message":{"content":"..."}}]}
+            val contentStart = resp.indexOf("\"content\":\"")
+            if (contentStart >= 0) {
+                val start = contentStart + 11
+                val end = resp.indexOf("\"", start)
+                if (end >= 0) resp.substring(start, end).replace("\\n", "\n") else null
+            } else null
+        } catch (e: Exception) {
+            Log.w("LocalModel", "Network inference failed: ${e.message}")
+            null
+        }
     }
 }

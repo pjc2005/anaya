@@ -1,1 +1,24 @@
-node_modules/
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# App build output
+app/build/
+
+# Models (downloaded at runtime)
+model/
+models/
+*.gguf
+
+# Keep assets/models in gitignore (too large)
+app/src/main/assets/models/
