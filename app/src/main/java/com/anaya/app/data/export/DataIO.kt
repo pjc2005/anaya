@@ -192,7 +192,17 @@ class DataExportImport @Inject constructor(
                 return@withContext SmartImportPreview(false, "文件内容为空")
             }
 
-            // 阶段一：启发式结构化解析（CSV / TSV / 分隔符文本）
+            // 阶段一：JSON 数组解析（钱迹/QianJi 等 App 的导出格式）
+            if (rawText.startsWith("[")) {
+                val jsonResult = tryParseJsonArray(rawText)
+                if (jsonResult.count > 0) {
+                    return@withContext jsonResult.copy(
+                        message = "通过 JSON 解析识别了 ${jsonResult.count} 条交易记录"
+                    )
+                }
+            }
+
+            // 阶段二：启发式结构化解析（CSV / TSV / 分隔符文本）
             val structured = tryParseStructured(rawText)
             if (structured.count > 0) {
                 return@withContext structured.copy(
@@ -200,7 +210,7 @@ class DataExportImport @Inject constructor(
                 )
             }
 
-            // 阶段二：模型提取（模型可用时）
+            // 阶段三：模型提取（模型可用时）
             if (localModel.isModelLoaded()) {
                 val parsed = localModel.extractTransactions(rawText)
                 if (parsed.isNotEmpty()) {
@@ -259,6 +269,94 @@ class DataExportImport @Inject constructor(
         }
 
     // ── 智能导入辅助方法 ──
+
+    /** 尝试 JSON 数组解析（钱迹等 App 的导出格式） */
+    private fun tryParseJsonArray(text: String): SmartImportPreview {
+        return try {
+            val arr = JSONArray(text)
+            if (arr.length() == 0) return SmartImportPreview(false, "JSON 数组为空")
+
+            val transactions = mutableListOf<TransactionEntity>()
+            val errors = mutableListOf<String>()
+
+            val dateFormats = listOf(
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()),
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()),
+                java.text.SimpleDateFormat("yyyy/MM/dd HH:mm:ss", java.util.Locale.getDefault()),
+                java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault()),
+                java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()),
+                java.text.SimpleDateFormat("yyyy/MM/dd", java.util.Locale.getDefault())
+            )
+
+            for (i in 0 until arr.length()) {
+                try {
+                    val obj = arr.getJSONObject(i)
+
+                    // 金额（钱迹：money 字段，单位为元）
+                    val money = obj.optDouble("money", -1.0)
+                    if (money <= 0) {
+                        errors.add("第 ${i + 1} 条：金额无效「$money」")
+                        continue
+                    }
+                    val amountCents = (money * 100).toLong()
+
+                    // 类型
+                    val typeStr = obj.optString("type", "")
+                    val type = when {
+                        typeStr.contains("收") || typeStr.contains("收入") -> "INCOME"
+                        typeStr.contains("支") || typeStr.contains("支出") -> "EXPENSE"
+                        typeStr.contains("转") -> "TRANSFER"
+                        else -> "EXPENSE"
+                    }
+
+                    // 日期
+                    val dateStr = obj.optString("date", "").trim()
+                    val dateMs = if (dateStr.isNotBlank()) {
+                        dateFormats.firstNotNullOfOrNull { fmt ->
+                            try { fmt.parse(dateStr)?.time } catch (_: Exception) { null }
+                        }
+                    } else null
+
+                    // 分类名称（暂存到 note，后续用于自动匹配分类）
+                    val category = obj.optString("category", "").trim()
+
+                    // 备注
+                    var note = obj.optString("remark", "").trim()
+                    if (note.isBlank()) {
+                        note = obj.optString("note", "").trim()
+                    }
+
+                    // 构建备注（含分类信息）
+                    val fullNote = buildString {
+                        if (note.isNotBlank()) append(note)
+                        if (category.isNotBlank()) {
+                            if (isNotEmpty()) append(" | ")
+                            append("分类:$category")
+                        }
+                    }.takeIf { it.isNotBlank() }
+
+                    transactions.add(TransactionEntity(
+                        amount = amountCents,
+                        type = type,
+                        categoryId = 0,
+                        accountId = 1,
+                        note = fullNote,
+                        date = dateMs ?: System.currentTimeMillis()
+                    ))
+                } catch (e: Exception) {
+                    errors.add("第 ${i + 1} 条解析异常：${e.message}")
+                }
+            }
+
+            if (transactions.isEmpty()) {
+                SmartImportPreview(false, "JSON 未识别到有效交易，${errors.size} 个解析错误", errors = errors)
+            } else {
+                SmartImportPreview(true, "识别了 ${transactions.size} 条", transactions = transactions, errors = errors)
+            }
+        } catch (e: Exception) {
+            SmartImportPreview(false, "JSON 解析失败：${e.message}")
+        }
+    }
 
     /** 尝试结构化解析 CSV / TSV 等分隔符文本 */
     private fun tryParseStructured(text: String): SmartImportPreview {
