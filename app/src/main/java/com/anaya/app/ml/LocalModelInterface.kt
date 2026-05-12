@@ -5,6 +5,8 @@ data class ParsedTransaction(
     val merchant: String? = null,
     val categoryName: String? = null,
     val note: String? = null,
+    val type: String? = null,       // EXPENSE / INCOME / TRANSFER（模型推断）
+    val dateMs: Long? = null,       // 交易时间（毫秒），模型推断或启发式解析
     val confidence: Float = 0f
 )
 
@@ -32,6 +34,12 @@ interface LocalModelInterface {
         amount: Long?,
         existingCategories: List<String>
     ): ClassificationResult
+    /**
+     * 从任意格式的文本中批量提取交易记录。
+     * 输入可以是 CSV、TSV、银行对账单、其他 App 导出文本等。
+     */
+    suspend fun extractTransactions(rawText: String): List<ParsedTransaction>
+
     suspend fun generateSavingTips(
         monthlyExpenseByCategory: Map<String, Long>,
         totalMonthlyExpense: Long,

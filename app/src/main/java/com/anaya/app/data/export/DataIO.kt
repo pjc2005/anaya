@@ -15,6 +15,8 @@ import com.anaya.app.domain.model.TransactionType
 import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.domain.repository.TransactionRepository
+import com.anaya.app.ml.LocalModelInterface
+import com.anaya.app.ml.ParsedTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -48,8 +50,19 @@ data class ImportResult(
     val message: String,
     val importedCount: Int = 0,
     val skippedCount: Int = 0,
-    val errors: List<String> = emptyList()
+    val errors: List<String> = emptyList(),
+    val transactions: List<TransactionEntity> = emptyList()
 )
+
+/** 智能导入预览 — 展示模型/规则解析出的交易供用户确认 */
+data class SmartImportPreview(
+    val success: Boolean,
+    val message: String,
+    val transactions: List<TransactionEntity> = emptyList(),
+    val errors: List<String> = emptyList()
+) {
+    val count: Int get() = transactions.size
+}
 
 /** 导出数据的封装 */
 private data class ExportData(
@@ -72,7 +85,8 @@ class DataExportImport @Inject constructor(
     private val categoryRepository: CategoryRepository,
     private val transactionDao: TransactionDao,
     private val accountDao: AccountDao,
-    private val categoryDao: CategoryDao
+    private val categoryDao: CategoryDao,
+    private val localModel: LocalModelInterface
 ) {
 
     // ── 导出 ──
@@ -150,11 +164,244 @@ class DataExportImport @Inject constructor(
             }
 
             // 保存到数据库
-            saveImportedTransactions(result)
+            saveTransactionEntities(result.transactions)
 
             result
         } catch (e: Exception) {
             ImportResult(false, "导入失败：${e.message}")
+        }
+    }
+
+    // ── 智能导入（识别任意格式）──
+
+    /**
+     * 智能导入 — 读取文件内容，先尝试结构化解析（CSV/TSV），失败则使用模型推理。
+     * 返回预览数据供用户确认，不直接写入数据库。
+     */
+    suspend fun smartImport(uri: Uri): SmartImportPreview = withContext(Dispatchers.IO) {
+        try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+                ?: return@withContext SmartImportPreview(false, "无法打开文件")
+
+            val rawText = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
+                .readText()
+                .trim()
+
+            if (rawText.isBlank()) {
+                return@withContext SmartImportPreview(false, "文件内容为空")
+            }
+
+            // 阶段一：启发式结构化解析（CSV / TSV / 分隔符文本）
+            val structured = tryParseStructured(rawText)
+            if (structured.count > 0) {
+                return@withContext structured.copy(
+                    message = "通过结构化解析识别了 ${structured.count} 条交易记录"
+                )
+            }
+
+            // 阶段二：模型提取（模型可用时）
+            if (localModel.isModelLoaded()) {
+                val parsed = localModel.extractTransactions(rawText)
+                if (parsed.isNotEmpty()) {
+                    val entities = parsed.map { parsedToEntity(it) }
+                    val errors = parsed.filter { it.amount == null }
+                        .map { "无法解析金额：${it.note ?: it.merchant ?: "未知"}" }
+                    return@withContext SmartImportPreview(
+                        success = true,
+                        message = "通过AI模型识别了 ${entities.size} 条交易记录",
+                        transactions = entities,
+                        errors = errors
+                    )
+                }
+            }
+
+            // 阶段三：逐行正则回退
+            val lines = rawText.lines().filter { it.isNotBlank() && !isHeaderLine(it) }
+            val parsed = lines.mapNotNull { line ->
+                val result = com.anaya.app.ml.RuleBasedParser.parsePaymentText(line)
+                if (result.amount != null && result.amount > 0) parsedToEntity(result) else null
+            }
+
+            if (parsed.isNotEmpty()) {
+                SmartImportPreview(
+                    success = true,
+                    message = "通过正则匹配识别了 ${parsed.size} 条交易记录",
+                    transactions = parsed
+                )
+            } else {
+                SmartImportPreview(
+                    success = false,
+                    message = "未能从文件中识别出任何交易记录。文件内容：${rawText.take(100)}${if (rawText.length > 100) "..." else ""}"
+                )
+            }
+        } catch (e: Exception) {
+            SmartImportPreview(false, "智能导入失败：${e.message}")
+        }
+    }
+
+    /** 确认智能导入：将预览的交易写入数据库 */
+    suspend fun confirmSmartImport(preview: SmartImportPreview): ImportResult =
+        withContext(Dispatchers.IO) {
+            if (preview.transactions.isEmpty()) {
+                return@withContext ImportResult(false, "没有可导入的交易记录")
+            }
+            try {
+                saveTransactionEntities(preview.transactions)
+                ImportResult(
+                    success = true,
+                    message = "成功导入 ${preview.transactions.size} 条交易记录",
+                    importedCount = preview.transactions.size
+                )
+            } catch (e: Exception) {
+                ImportResult(false, "保存失败：${e.message}")
+            }
+        }
+
+    // ── 智能导入辅助方法 ──
+
+    /** 尝试结构化解析 CSV / TSV 等分隔符文本 */
+    private fun tryParseStructured(text: String): SmartImportPreview {
+        val lines = text.lines().filter { it.isNotBlank() }
+        if (lines.size < 2) return SmartImportPreview(false, "行数不足")
+
+        // 探测分隔符
+        val delimiters = listOf('\t', ',', '|', ';')
+        val firstLine = lines.first()
+        val delim = delimiters.firstOrNull { d -> firstLine.count { c -> c == d } >= 2 }
+            ?: return SmartImportPreview(false, "未检测到分隔符")
+
+        val headerCols = firstLine.split(delim).map { it.trim() }
+        if (headerCols.size < 2) return SmartImportPreview(false, "列数不足")
+
+        // 匹配列索引
+        val dateIdx = headerCols.indexOfFirst { it.contains(Regex("日期|时间|日付|Date|date|time|Time")) }
+        val amountIdx = headerCols.indexOfFirst { it.contains(Regex("金额|金额|金额|Amount|amount|价格|Price|price")) }
+        val typeIdx = headerCols.indexOfFirst { it.contains(Regex("类型|类别|收支|Type|type|方向|收入|支出")) }
+        val noteIdx = headerCols.indexOfFirst { it.contains(Regex("备注|说明|描述|摘要|商户|商家|Note|note|Desc|desc|Merchant|merchant")) }
+        val categoryIdx = headerCols.indexOfFirst { it.contains(Regex("分类|Category|category|类目")) }
+
+        if (amountIdx < 0) return SmartImportPreview(false, "未找到金额列（表头：${headerCols.joinToString(", ")}）")
+
+        val dateFormats = listOf(
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()),
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()),
+            java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault()),
+            java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()),
+            java.text.SimpleDateFormat("yyyy/MM/dd", java.util.Locale.getDefault()),
+            java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault())
+        )
+
+        val transactions = mutableListOf<TransactionEntity>()
+        val errors = mutableListOf<String>()
+
+        for ((rowIdx, line) in lines.drop(1).withIndex()) {
+            try {
+                val cols = line.split(delim).map { it.trim() }
+                if (cols.size < 2) continue
+
+                // 解析金额
+                val amountStr = if (amountIdx < cols.size) cols[amountIdx] else ""
+                val amountYuan = amountStr.replace(Regex("[¥￥,，\\s]"), "").toDoubleOrNull()
+                if (amountYuan == null || amountYuan <= 0) {
+                    errors.add("第 ${rowIdx + 2} 行：金额无效「$amountStr」")
+                    continue
+                }
+                val amountCents = (amountYuan * 100).toLong()
+
+                // 解析类型
+                val typeStr = if (typeIdx >= 0 && typeIdx < cols.size) cols[typeIdx] else ""
+                val type = when {
+                    typeStr.contains("收") || typeStr.contains("INCOME") || typeStr.contains("income") || typeStr == "+" -> "INCOME"
+                    typeStr.contains("支") || typeStr.contains("EXPENSE") || typeStr.contains("expense") || typeStr == "-" -> "EXPENSE"
+                    typeStr.contains("转") || typeStr.contains("TRANSFER") || typeStr.contains("transfer") -> "TRANSFER"
+                    else -> "EXPENSE"
+                }
+
+                // 解析日期
+                val dateStr = if (dateIdx >= 0 && dateIdx < cols.size) cols[dateIdx] else ""
+                val dateMs = if (dateStr.isNotBlank()) {
+                    dateFormats.firstNotNullOfOrNull { fmt ->
+                        try { fmt.parse(dateStr)?.time } catch (_: Exception) { null }
+                    }
+                } else null
+
+                // 备注
+                val note = if (noteIdx >= 0 && noteIdx < cols.size) cols[noteIdx].take(200) else null
+                val categoryName = if (categoryIdx >= 0 && categoryIdx < cols.size) cols[categoryIdx] else null
+
+                transactions.add(TransactionEntity(
+                    amount = amountCents,
+                    type = type,
+                    categoryId = 0,
+                    accountId = 1,
+                    note = buildString {
+                        if (note != null) append(note)
+                        if (categoryName != null && categoryName.isNotBlank()) {
+                            if (isNotEmpty()) append(" | ")
+                            append("分类:$categoryName")
+                        }
+                    }.takeIf { it.isNotBlank() },
+                    date = dateMs ?: System.currentTimeMillis()
+                ))
+            } catch (e: Exception) {
+                errors.add("第 ${rowIdx + 2} 行解析异常：${e.message}")
+            }
+        }
+
+        return if (transactions.isEmpty()) {
+            SmartImportPreview(false, "结构化解析未识别到有效交易，${errors.size} 个解析错误", errors = errors)
+        } else {
+            SmartImportPreview(true, "识别了 ${transactions.size} 条", transactions = transactions, errors = errors)
+        }
+    }
+
+    /** 判断是否为表头行 */
+    private fun isHeaderLine(line: String): Boolean {
+        val headers = listOf("金额", "日期", "时间", "备注", "商户", "类型", "分类", "收入", "支出",
+            "amount", "date", "time", "note", "merchant", "type", "category")
+        return headers.any { line.contains(it, ignoreCase = true) } && line.count { it == ',' || it == '\t' || it == '|' } >= 2
+    }
+
+    /** 将模型解析结果转换为数据库实体 */
+    private fun parsedToEntity(p: ParsedTransaction): TransactionEntity {
+        val type = when (p.type) {
+            "INCOME" -> "INCOME"
+            "TRANSFER" -> "TRANSFER"
+            else -> "EXPENSE"
+        }
+        val note = listOfNotNull(p.merchant, p.note).joinToString(" | ")
+        return TransactionEntity(
+            amount = p.amount ?: 0L,
+            type = type,
+            categoryId = 0,
+            accountId = 1,
+            note = note.take(500).ifBlank { null },
+            date = p.dateMs ?: System.currentTimeMillis()
+        )
+    }
+
+    // ══════════════════════════════════════════════════
+    // 写入数据库
+    // ══════════════════════════════════════════════════
+
+    /** 直接将实体列表写入数据库 */
+    private suspend fun saveTransactionEntities(entities: List<TransactionEntity>) {
+        entities.forEach { tx ->
+            try {
+                val domainTx = Transaction(
+                    id = tx.id,
+                    amount = tx.amount,
+                    type = try { TransactionType.valueOf(tx.type) } catch (_: Exception) { TransactionType.EXPENSE },
+                    categoryId = tx.categoryId,
+                    accountId = if (tx.accountId == 0L) 1 else tx.accountId,
+                    targetAccountId = tx.targetAccountId,
+                    note = tx.note,
+                    date = tx.date,
+                    createdAt = tx.createdAt,
+                    updatedAt = tx.updatedAt
+                )
+                transactionRepository.insert(domainTx)
+            } catch (_: Exception) { /* 忽略单条失败 */ }
         }
     }
 
@@ -243,7 +490,8 @@ class DataExportImport @Inject constructor(
             message = "解析到 ${transactions.size} 条交易记录",
             importedCount = transactions.size,
             skippedCount = errors.size,
-            errors = errors
+            errors = errors,
+            transactions = transactions
         )
     }
 
@@ -458,7 +706,8 @@ class DataExportImport @Inject constructor(
             message = "解析到 ${transactions.size} 条交易记录",
             importedCount = transactions.size,
             skippedCount = errors.size,
-            errors = errors
+            errors = errors,
+            transactions = transactions
         )
     }
 

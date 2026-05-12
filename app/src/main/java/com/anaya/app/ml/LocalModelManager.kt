@@ -169,6 +169,43 @@ class LocalModelManager @Inject constructor(
         }
     }
 
+    override suspend fun extractTransactions(rawText: String): List<ParsedTransaction> {
+        return withContext(Dispatchers.Default) {
+            if (isLoaded && nativeAvailable) {
+                // 控制输入长度，防止 token 溢出
+                val truncated = if (rawText.length > 6000) {
+                    rawText.take(6000) + "\n...(文件较长，已截取前6000字符)"
+                } else rawText
+
+                val prompt = buildPrompt("extract", truncated)
+                val result = nativeInference(prompt, 1024)
+                LLMResponseParser.parseTransactionList(result)
+                    ?: fallbackParseTransactions(rawText)
+            } else {
+                fallbackParseTransactions(rawText)
+            }
+        }
+    }
+
+    /**
+     * 当模型不可用时的回退解析：尝试按行解析常见格式
+     */
+    private fun fallbackParseTransactions(rawText: String): List<ParsedTransaction> {
+        val results = mutableListOf<ParsedTransaction>()
+        val lines = rawText.lines().filter { it.isNotBlank() }
+
+        for (line in lines) {
+            // 跳过表头行
+            if (line.contains("金额") || line.contains("日期") || line.contains("商户")) continue
+
+            val parsed = RuleBasedParser.parsePaymentText(line)
+            if (parsed.amount != null && parsed.amount > 0) {
+                results.add(parsed)
+            }
+        }
+        return results
+    }
+
     override suspend fun generateSavingTips(
         monthlyExpenseByCategory: Map<String, Long>,
         totalMonthlyExpense: Long,
@@ -228,6 +265,7 @@ class LocalModelManager @Inject constructor(
         val sysMsg = when (task) {
             "parse" -> "你是一个支付信息提取助手。从用户提供的文本中提取金额、商户、备注信息，返回JSON格式。"
             "classify" -> "你是一个消费分类助手。根据商户名称和备注将交易分类到合适的类别，返回JSON。"
+            "extract" -> "你是一个记账数据导入助手。你收到的文本是其他记账App导出的交易记录（可能是CSV、TSV或纯文本格式）。请分析并提取所有交易记录，按以下JSON数组格式输出：\n[\n  {\"amount\": 1250, \"type\": \"EXPENSE\", \"note\": \"麦当劳午餐\", \"merchant\": \"麦当劳\", \"category\": \"餐饮\", \"confidence\": 0.9},\n  ...\n]\n要求：\n- amount: 金额，以**分**为单位（元×100）。例如12.50元 → 1250\n- type: \"EXPENSE\"(支出) / \"INCOME\"(收入) / \"TRANSFER\"(转账)\n- note: 完整的交易描述\n- merchant: 商户/收款方名称\n- category: 交易分类(如餐饮/交通/购物等)，推断不出则留空\n- 只输出JSON数组，不要加其他文字"
             else -> ""
         }
         return "<|im_start|>system\n$sysMsg\n<|im_end|>\n<|im_start|>user\n$input\n<|im_end|>\n<|im_start|>assistant\n"

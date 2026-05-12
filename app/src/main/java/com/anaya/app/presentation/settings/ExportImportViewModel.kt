@@ -7,9 +7,11 @@ import com.anaya.app.data.export.DataExportImport
 import com.anaya.app.data.export.ExportFormat
 import com.anaya.app.data.export.ExportResult
 import com.anaya.app.data.export.ImportResult
+import com.anaya.app.data.export.SmartImportPreview
 import com.anaya.app.data.local.dao.AccountDao
 import com.anaya.app.data.local.dao.CategoryDao
 import com.anaya.app.data.local.dao.TransactionDao
+import com.anaya.app.data.local.entity.TransactionEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -24,7 +26,11 @@ data class ExportImportUiState(
     val isExporting: Boolean = false,
     val isImporting: Boolean = false,
     val exportResult: ExportResult? = null,
-    val importResult: ImportResult? = null
+    val importResult: ImportResult? = null,
+    // 智能导入
+    val isSmartImporting: Boolean = false,
+    val smartPreview: SmartImportPreview? = null,
+    val smartImportResult: ImportResult? = null
 )
 
 @HiltViewModel
@@ -81,6 +87,33 @@ class ExportImportViewModel @Inject constructor(
             // 刷新统计
             if (result.success) loadStats()
         }
+    }
+
+    // ── 智能导入 ──
+
+    fun doSmartImport(uri: Uri) {
+        viewModelScope.launch {
+            _state.update { it.copy(isSmartImporting = true, smartPreview = null, smartImportResult = null) }
+            val preview = dataIO.smartImport(uri)
+            _state.update { it.copy(isSmartImporting = false, smartPreview = preview) }
+        }
+    }
+
+    fun confirmSmartImport() {
+        val preview = _state.value.smartPreview ?: return
+        viewModelScope.launch {
+            val result = dataIO.confirmSmartImport(preview)
+            _state.update { it.copy(smartPreview = null, smartImportResult = result) }
+            if (result.success) loadStats()
+        }
+    }
+
+    fun cancelSmartImport() {
+        _state.update { it.copy(smartPreview = null) }
+    }
+
+    fun clearSmartImportResult() {
+        _state.update { it.copy(smartImportResult = null) }
     }
 
     fun clearExportResult() {
