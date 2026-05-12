@@ -25,6 +25,7 @@ fun SettingsScreen(
     onNavigateToCategories: () -> Unit = {},
     onNavigateToAccounts: () -> Unit = {},
     onNavigateToSmartCapture: () -> Unit = {},
+    onNavigateToExportImport: () -> Unit = {},
     onNavigateToSavings: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -62,6 +63,14 @@ fun SettingsScreen(
                 title = "智能捕获",
                 subtitle = "剪贴板监听 & 自动识别支付信息",
                 onClick = onNavigateToSmartCapture
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+
+            SettingsItem(
+                icon = Icons.Default.FileDownload,
+                title = "导入/导出",
+                subtitle = "导出为 JSON 或 Excel 文件，或从文件恢复数据",
+                onClick = onNavigateToExportImport
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
 

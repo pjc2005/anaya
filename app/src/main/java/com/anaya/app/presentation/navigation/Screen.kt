@@ -68,6 +68,11 @@ sealed class Screen(
         label = "省钱方案"
     )
 
+    data object ExportImport : Screen(
+        route = "export_import",
+        label = "导入/导出"
+    )
+
     data object Setup : Screen(
         route = "setup",
         label = "设置向导"

@@ -13,6 +13,7 @@ import com.anaya.app.presentation.account.AccountEditorScreen
 import com.anaya.app.presentation.settings.AccountManagerScreen
 import com.anaya.app.presentation.settings.CategoryManagerScreen
 import com.anaya.app.presentation.settings.SettingsScreen
+import com.anaya.app.presentation.settings.ExportImportScreen
 import com.anaya.app.presentation.smartcapture.SmartCaptureScreen
 import com.anaya.app.presentation.savings.SavingsScreen
 import com.anaya.app.presentation.setup.SetupScreen
@@ -82,7 +83,16 @@ fun NavGraph(
                 },
                 onNavigateToSmartCapture = {
                     navController.navigate(Screen.SmartCapture.route)
+                },
+                onNavigateToExportImport = {
+                    navController.navigate(Screen.ExportImport.route)
                 }
+            )
+        }
+
+        composable(Screen.ExportImport.route) {
+            ExportImportScreen(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 
