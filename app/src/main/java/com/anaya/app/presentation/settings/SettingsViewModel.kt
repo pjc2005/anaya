@@ -8,6 +8,8 @@ import com.anaya.app.domain.model.Category
 import com.anaya.app.domain.model.CategoryType
 import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.CategoryRepository
+import com.anaya.app.ml.LocalModelManager
+import com.anaya.app.ml.ModelStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -34,8 +36,12 @@ data class AccountSettingsState(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val categoryRepository: CategoryRepository,
-    private val accountRepository: AccountRepository
+    private val accountRepository: AccountRepository,
+    private val localModel: LocalModelManager
 ) : ViewModel() {
+
+    val modelStatus: StateFlow<ModelStatus> = localModel.modelStatus
+    val downloadProgress: StateFlow<Int> = localModel.downloadProgress
 
     private val _categoryState = MutableStateFlow(CategorySettingsState())
     val categoryState: StateFlow<CategorySettingsState> = _categoryState.asStateFlow()
@@ -211,5 +217,15 @@ class SettingsViewModel @Inject constructor(
 
     fun dismissAccountDialog() {
         _accountState.update { it.copy(showDialog = false) }
+    }
+
+    fun checkModelStatus() {
+        localModel.checkModelStatus()
+    }
+
+    fun downloadModel() {
+        viewModelScope.launch {
+            localModel.downloadModel()
+        }
     }
 }

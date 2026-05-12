@@ -4,10 +4,17 @@ import android.content.Context
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
+
+enum class ModelStatus { NotDownloaded, Downloading, Ready, Error }
 
 @Singleton
 class LocalModelManager @Inject constructor(
@@ -16,6 +23,12 @@ class LocalModelManager @Inject constructor(
 
     private var isLoaded = false
     private var nativeAvailable = false
+
+    private val _modelStatus = MutableStateFlow(ModelStatus.NotDownloaded)
+    val modelStatus: StateFlow<ModelStatus> = _modelStatus.asStateFlow()
+
+    private val _downloadProgress = MutableStateFlow(0)
+    val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
 
     init {
         try {
@@ -32,6 +45,62 @@ class LocalModelManager @Inject constructor(
     private external fun nativeInference(prompt: String, maxTokens: Int): String
 
     override fun isModelLoaded(): Boolean = isLoaded
+
+    fun getModelDir(): String =
+        context.filesDir.resolve("models").absolutePath
+
+    fun getModelFilePath(): String =
+        File(getModelDir(), LocalModelInterface.MODEL_FILENAME).absolutePath
+
+    fun isModelFilePresent(): Boolean =
+        File(getModelFilePath()).exists()
+
+    fun getModelFileSize(): Long {
+        val f = File(getModelFilePath())
+        return if (f.exists()) f.length() else -1
+    }
+
+    fun checkModelStatus() {
+        _modelStatus.value = if (isModelFilePresent()) ModelStatus.Ready else ModelStatus.NotDownloaded
+    }
+
+    suspend fun downloadModel() = withContext(Dispatchers.IO) {
+        if (isModelFilePresent()) {
+            _modelStatus.value = ModelStatus.Ready
+            return@withContext
+        }
+        _modelStatus.value = ModelStatus.Downloading
+        _downloadProgress.value = 0
+        try {
+            val dir = File(getModelDir())
+            dir.mkdirs()
+            val url = URL("https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 15000
+            conn.connect()
+            val totalBytes = conn.contentLengthLong
+            val input = conn.inputStream
+            val output = File(getModelFilePath()).outputStream()
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
+            var totalRead = 0L
+            while (input.read(buffer).also { bytesRead = it } != -1) {
+                output.write(buffer, 0, bytesRead)
+                totalRead += bytesRead
+                if (totalBytes > 0) {
+                    _downloadProgress.value = ((totalRead * 100) / totalBytes).toInt()
+                }
+            }
+            output.close()
+            input.close()
+            conn.disconnect()
+            _modelStatus.value = ModelStatus.Ready
+            Log.i("LocalModel", "Model downloaded: ${getModelFilePath()}")
+        } catch (e: Exception) {
+            Log.e("LocalModel", "Download failed", e)
+            _modelStatus.value = ModelStatus.Error
+        }
+    }
 
     override suspend fun loadModel(modelPath: String): Boolean = withContext(Dispatchers.IO) {
         val file = File(modelPath)

@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.anaya.app.ml.ModelStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +71,40 @@ fun SettingsScreen(
                 subtitle = "跟随系统设置",
                 onClick = { }
             )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+
+            // 模型状态
+            val modelStatus by viewModel.modelStatus.collectAsState()
+            val downloadProgress by viewModel.downloadProgress.collectAsState()
+
+            LaunchedEffect(Unit) { viewModel.checkModelStatus() }
+
+            when (modelStatus) {
+                ModelStatus.Ready -> SettingsItem(
+                    icon = Icons.Default.Info,
+                    title = "AI 模型已就绪",
+                    subtitle = "本地智能识别引擎正常",
+                    onClick = { }
+                )
+                ModelStatus.Downloading -> SettingsItem(
+                    icon = Icons.Default.Download,
+                    title = "正在下载模型...",
+                    subtitle = "进度 $downloadProgress% （首次下载约需 10-15 分钟）",
+                    onClick = { }
+                )
+                ModelStatus.NotDownloaded -> SettingsItem(
+                    icon = Icons.Default.Download,
+                    title = "下载 AI 模型",
+                    subtitle = "下载后启用本地智能识别（469MB，仅一次）",
+                    onClick = { viewModel.downloadModel() }
+                )
+                ModelStatus.Error -> SettingsItem(
+                    icon = Icons.Default.Download,
+                    title = "下载失败，点击重试",
+                    subtitle = "请检查网络连接后重试",
+                    onClick = { viewModel.downloadModel() }
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
 
             Spacer(Modifier.weight(1f))
