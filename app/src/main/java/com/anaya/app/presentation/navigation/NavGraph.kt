@@ -14,6 +14,7 @@ import com.anaya.app.presentation.settings.CategoryManagerScreen
 import com.anaya.app.presentation.settings.SettingsScreen
 import com.anaya.app.presentation.smartcapture.SmartCaptureScreen
 import com.anaya.app.presentation.savings.SavingsScreen
+import com.anaya.app.presentation.setup.SetupScreen
 import com.anaya.app.presentation.stats.StatsScreen
 import com.anaya.app.presentation.transaction.TransactionListScreen
 import com.anaya.app.presentation.transaction.editor.TransactionEditorScreen
@@ -21,11 +22,12 @@ import com.anaya.app.presentation.transaction.editor.TransactionEditorScreen
 @Composable
 fun NavGraph(
     navController: NavHostController,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    startDestination: String = Screen.Home.route
 ) {
     NavHost(
         navController = navController,
-        startDestination = Screen.Home.route,
+        startDestination = startDestination,
         modifier = modifier
     ) {
         composable(Screen.Home.route) {
@@ -98,6 +100,16 @@ fun NavGraph(
 
         composable(Screen.Savings.route) {
             SavingsScreen()
+        }
+
+        composable(Screen.Setup.route) {
+            SetupScreen(
+                onSetupComplete = {
+                    navController.navigate(Screen.Home.route) {
+                        popUpTo(Screen.Setup.route) { inclusive = true }
+                    }
+                }
+            )
         }
     }
 }
