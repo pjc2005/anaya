@@ -1,9 +1,12 @@
 package com.anaya.app.presentation.home
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,14 +19,16 @@ import com.anaya.app.domain.model.TransactionType
 import java.text.SimpleDateFormat
 import java.util.*
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     onAddTransaction: () -> Unit,
+    onTransactionClick: (Long) -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val dateFormat = remember { SimpleDateFormat("MM/dd HH:mm", Locale.CHINA) }
+    var deleteTransactionId by remember { mutableStateOf<Long?>(null) }
 
     Scaffold(
         floatingActionButton = {
@@ -109,7 +114,14 @@ fun HomeScreen(
                     }
                 } else {
                     items(state.recentTransactions, key = { it.id }) { tx ->
-                        Card(modifier = Modifier.fillMaxWidth()) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = { onTransactionClick(tx.id) },
+                                    onLongClick = { deleteTransactionId = tx.id }
+                                )
+                        ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -139,6 +151,40 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // 删除确认对话框
+    deleteTransactionId?.let { txId ->
+        AlertDialog(
+            onDismissRequest = { deleteTransactionId = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("确认删除") },
+            text = { Text("删除后无法恢复，确定要删除这条记账记录吗？") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteTransaction(txId)
+                        deleteTransactionId = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTransactionId = null }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 

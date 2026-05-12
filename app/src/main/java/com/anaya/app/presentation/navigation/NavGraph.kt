@@ -31,9 +31,14 @@ fun NavGraph(
         modifier = modifier
     ) {
         composable(Screen.Home.route) {
-            HomeScreen(onAddTransaction = {
-                navController.navigate("transaction/editor?transactionId=0")
-            })
+            HomeScreen(
+                onAddTransaction = {
+                    navController.navigate("transaction/editor?transactionId=0")
+                },
+                onTransactionClick = { id ->
+                    navController.navigate("transaction/editor?transactionId=$id")
+                }
+            )
         }
 
         composable(Screen.Transactions.route) {

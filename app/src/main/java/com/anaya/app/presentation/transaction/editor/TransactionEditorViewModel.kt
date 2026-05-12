@@ -225,4 +225,16 @@ class TransactionEditorViewModel @Inject constructor(
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null, saveState = SaveState.IDLE) }
     }
+
+    fun deleteTransaction() {
+        val id = transactionId ?: return
+        viewModelScope.launch {
+            try {
+                transactionRepository.deleteById(id)
+                _uiState.update { it.copy(saveState = SaveState.IDLE) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.message) }
+            }
+        }
+    }
 }

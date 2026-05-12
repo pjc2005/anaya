@@ -79,4 +79,10 @@ class HomeViewModel @Inject constructor(
             isLoading = false
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
+
+    fun deleteTransaction(id: Long) {
+        viewModelScope.launch {
+            transactionRepository.deleteById(id)
+        }
+    }
 }

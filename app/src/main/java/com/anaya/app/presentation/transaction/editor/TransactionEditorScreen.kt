@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,6 +43,7 @@ fun TransactionEditorScreen(
 
     var showAccountPicker by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.saveState) {
         if (state.saveState == SaveState.IDLE && !state.isEditing
@@ -60,6 +62,15 @@ fun TransactionEditorScreen(
                     }
                 },
                 actions = {
+                    if (state.isEditing) {
+                        IconButton(onClick = { showDeleteDialog = true }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "删除",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                     TextButton(
                         onClick = { viewModel.save() },
                         enabled = state.amountDisplay != "0" && state.selectedCategory != null
@@ -235,6 +246,41 @@ fun TransactionEditorScreen(
         ) {
             DatePicker(state = datePickerState)
         }
+    }
+
+    // ── Delete Confirmation Dialog ──
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("确认删除") },
+            text = { Text("删除后无法恢复，确定要删除这条记账记录吗？") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteTransaction()
+                        showDeleteDialog = false
+                        onNavigateBack()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 
     // ── Error Snackbar ──
