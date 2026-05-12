@@ -13,6 +13,7 @@ import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
 import com.anaya.app.ml.RuleBasedClassifier
 import com.anaya.app.service.ClipboardMonitor
+import com.anaya.app.service.PaymentEventBus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -38,7 +39,8 @@ class SmartCaptureViewModel @Inject constructor(
     private val localModel: LocalModelInterface,
     private val transactionRepository: TransactionRepository,
     private val categoryRepository: CategoryRepository,
-    private val accountRepository: AccountRepository
+    private val accountRepository: AccountRepository,
+    private val eventBus: PaymentEventBus
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SmartCaptureUiState())
@@ -52,20 +54,32 @@ class SmartCaptureViewModel @Inject constructor(
 
             clipboardMonitor.clipboardFlow.collect { parsed ->
                 if (parsed != null && parsed.amount != null) {
-                    val cat = RuleBasedClassifier.suggestCategoryName(parsed.merchant, parsed.note)
-                    val catId = cats.find { it.name == cat }?.id
-                    _state.update {
-                        it.copy(
-                            detectedList = listOf(
-                                DetectedTransaction(
-                                    "clipboard", parsed, catId,
-                                    parsed.amount ?: 0
-                                )
-                            ) + it.detectedList
-                        )
-                    }
+                    onDetected("剪贴板", parsed, cats)
                 }
             }
+        }
+
+        viewModelScope.launch {
+            eventBus.events.collect { parsed ->
+                if (parsed.amount != null) {
+                    onDetected("无障碍", parsed, _state.value.categories)
+                }
+            }
+        }
+    }
+
+    private fun onDetected(source: String, parsed: ParsedTransaction, cats: List<Category>) {
+        val cat = RuleBasedClassifier.suggestCategoryName(parsed.merchant, parsed.note)
+        val catId = cats.find { it.name == cat }?.id
+        _state.update {
+            it.copy(
+                detectedList = listOf(
+                    DetectedTransaction(
+                        source, parsed, catId,
+                        parsed.amount ?: 0
+                    )
+                ) + it.detectedList
+            )
         }
     }
 
