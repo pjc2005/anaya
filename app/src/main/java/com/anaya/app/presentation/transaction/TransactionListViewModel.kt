@@ -11,6 +11,7 @@ import com.anaya.app.util.getMonthEndMillis
 import com.anaya.app.util.getMonthStartMillis
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import java.time.YearMonth
 import java.util.Calendar
 import javax.inject.Inject
@@ -92,5 +93,11 @@ class TransactionListViewModel @Inject constructor(
 
     fun selectMonth(yearMonth: YearMonth) {
         _selectedYearMonth.value = yearMonth
+    }
+
+    fun deleteTransaction(id: Long) {
+        viewModelScope.launch {
+            transactionRepository.deleteById(id)
+        }
     }
 }
