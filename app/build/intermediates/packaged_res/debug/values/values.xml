@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="ic_launcher_background">#4CAF50</color>
-    <string name="accessibility_service_description">Anaya记账自动识别服务——监听支付应用的通知和页面变化，自动捕获消费信息</string>
-    <string name="app_name">Anaya</string>
-    <style name="Theme.Anaya" parent="android:Theme.Material.Light.NoActionBar"/>
-</resources>
