@@ -5,12 +5,16 @@ import android.content.Context
 import android.util.Log
 import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
+import com.anaya.app.ml.RuleBasedParser
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,6 +25,7 @@ class ClipboardMonitor @Inject constructor(
 ) {
     private val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     private var lastText: String? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val clipboardFlow: Flow<ParsedTransaction?> = callbackFlow {
         val listener = ClipboardManager.OnPrimaryClipChangedListener {
@@ -30,7 +35,9 @@ class ClipboardMonitor @Inject constructor(
                 if (text != null && text != lastText) {
                     lastText = text
                     Log.d("Clipboard", "Detected: $text")
-                    trySend(localModel.parsePaymentText(text))
+                    // Use blocking parse since we're on the clipboard listener thread
+                    val parsed = RuleBasedParser.parsePaymentText(text)
+                    trySend(parsed)
                 }
             }
         }

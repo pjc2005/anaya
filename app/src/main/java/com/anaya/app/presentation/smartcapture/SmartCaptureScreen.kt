@@ -1,5 +1,6 @@
 package com.anaya.app.presentation.smartcapture
 
+import com.anaya.app.util.CurrencyUtils
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,7 +17,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.anaya.app.util.centsToDisplayString
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,7 +105,7 @@ private fun DetectedCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "¥${centsToDisplayString(detected.parsed.amount ?: 0)}",
+                    "¥${CurrencyUtils.centsToDisplayString(detected.parsed.amount ?: 0)}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)

@@ -329,9 +329,8 @@ private fun NumberPad(
         }
     }
 }
-
 @Composable
-private fun NumButton(text: String, onClick: () -> Unit) {
+private fun RowScope.NumButton(text: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .weight(1f)

@@ -1,5 +1,6 @@
 package com.anaya.app.presentation.settings
 
+import com.anaya.app.util.CurrencyUtils
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -26,7 +27,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.anaya.app.domain.model.Account
 import com.anaya.app.domain.model.AccountType
-import com.anaya.app.util.centsToDisplayString
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -251,7 +251,7 @@ private fun AccountCard(
                         else MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "¥${centsToDisplayString(account.initialBalance)}",
+                        text = "¥${CurrencyUtils.centsToDisplayString(account.initialBalance)}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (archived) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.primary

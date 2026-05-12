@@ -19,9 +19,10 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class DetectedTransaction(
-    val source: String,            // "clipboard", "accessibility", "ocr"
+    val source: String,
     val parsed: ParsedTransaction,
-    val suggestedCategoryId: Long? = null
+    val suggestedCategoryId: Long? = null,
+    val suggestedAmount: Long = 0
 )
 
 data class SmartCaptureUiState(
@@ -56,7 +57,10 @@ class SmartCaptureViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             detectedList = listOf(
-                                DetectedTransaction("clipboard", parsed, catId)
+                                DetectedTransaction(
+                                    "clipboard", parsed, catId,
+                                    parsed.amount ?: 0
+                                )
                             ) + it.detectedList
                         )
                     }
@@ -67,13 +71,14 @@ class SmartCaptureViewModel @Inject constructor(
 
     fun acceptTransaction(detected: DetectedTransaction, categoryId: Long?, accountId: Long?) {
         viewModelScope.launch {
+            val amount = detected.suggestedAmount
+            if (amount <= 0) return@launch
             transactionRepository.insert(
                 Transaction(
-                    amount = detected.parsed.amount ?: return@launch,
+                    amount = amount,
                     type = TransactionType.EXPENSE,
-                    categoryId = categoryId ?: detected.suggestedCategoryId,
+                    categoryId = categoryId ?: detected.suggestedCategoryId ?: 0,
                     accountId = accountId ?: 1,
-                    merchant = detected.parsed.merchant,
                     note = detected.parsed.note,
                     date = System.currentTimeMillis()
                 )

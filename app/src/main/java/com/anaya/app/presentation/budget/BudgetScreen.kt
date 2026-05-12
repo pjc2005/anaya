@@ -1,4 +1,5 @@
 package com.anaya.app.presentation.budget
+import com.anaya.app.util.CurrencyUtils
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -24,7 +25,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.anaya.app.domain.model.BudgetPeriod
 import com.anaya.app.domain.model.Category
-import com.anaya.app.util.centsToDisplayString
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -136,11 +136,11 @@ private fun TotalBudgetCard(item: BudgetWithSpending) {
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    "已用 ¥${centsToDisplayString(item.spent)}",
+                    "已用 ¥${CurrencyUtils.centsToDisplayString(item.spent)}",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    "预算 ¥${centsToDisplayString(item.budget.amount)}",
+                    "预算 ¥${CurrencyUtils.centsToDisplayString(item.budget.amount)}",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -148,6 +148,7 @@ private fun TotalBudgetCard(item: BudgetWithSpending) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BudgetCard(
     item: BudgetWithSpending,
@@ -218,14 +219,14 @@ private fun BudgetCard(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        "已用 ¥${centsToDisplayString(item.spent)}",
+                        "已用 ¥${CurrencyUtils.centsToDisplayString(item.spent)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (item.percentage >= item.budget.alertThreshold / 100f)
                             MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "预算 ¥${centsToDisplayString(item.budget.amount)}",
+                        "预算 ¥${CurrencyUtils.centsToDisplayString(item.budget.amount)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

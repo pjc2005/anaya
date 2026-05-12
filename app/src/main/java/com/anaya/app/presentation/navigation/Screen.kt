@@ -63,6 +63,11 @@ sealed class Screen(
         label = "智能捕获"
     )
 
+    data object Savings : Screen(
+        route = "savings",
+        label = "省钱方案"
+    )
+
     companion object {
         val bottomNavItems = listOf(Home, Transactions, Stats, Budget, Settings)
     }

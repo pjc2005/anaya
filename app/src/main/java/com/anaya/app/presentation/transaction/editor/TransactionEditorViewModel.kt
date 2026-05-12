@@ -11,8 +11,7 @@ import com.anaya.app.domain.model.TransactionType
 import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.domain.repository.TransactionRepository
-import com.anaya.app.util.centsToDisplayString
-import com.anaya.app.util.displayStringToCents
+import com.anaya.app.util.CurrencyUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -89,7 +88,7 @@ class TransactionEditorViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         transactionType = tx.type,
-                        amountDisplay = centsToDisplayString(tx.amount),
+                        amountDisplay = CurrencyUtils.centsToDisplayString(tx.amount),
                         selectedCategory = category,
                         selectedAccount = account,
                         targetAccount = targetAccount,
@@ -171,7 +170,7 @@ class TransactionEditorViewModel @Inject constructor(
 
     fun save() {
         val state = _uiState.value
-        val amountCents = displayStringToCents(state.amountDisplay)
+        val amountCents = CurrencyUtils.displayStringToCents(state.amountDisplay)
 
         if (amountCents <= 0 || state.amountDisplay.endsWith(".")) {
             _uiState.update {

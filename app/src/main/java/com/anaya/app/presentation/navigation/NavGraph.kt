@@ -13,6 +13,7 @@ import com.anaya.app.presentation.settings.AccountManagerScreen
 import com.anaya.app.presentation.settings.CategoryManagerScreen
 import com.anaya.app.presentation.settings.SettingsScreen
 import com.anaya.app.presentation.smartcapture.SmartCaptureScreen
+import com.anaya.app.presentation.savings.SavingsScreen
 import com.anaya.app.presentation.stats.StatsScreen
 import com.anaya.app.presentation.transaction.TransactionListScreen
 import com.anaya.app.presentation.transaction.editor.TransactionEditorScreen
@@ -93,6 +94,10 @@ fun NavGraph(
             SmartCaptureScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
+        }
+
+        composable(Screen.Savings.route) {
+            SavingsScreen()
         }
     }
 }

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.anaya.app.domain.model.Budget
 import com.anaya.app.domain.model.BudgetPeriod
+import com.anaya.app.domain.model.CategoryType
 import com.anaya.app.domain.model.Category
 import com.anaya.app.domain.model.TransactionType
 import com.anaya.app.domain.repository.BudgetRepository

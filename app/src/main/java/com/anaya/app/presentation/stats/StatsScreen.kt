@@ -13,15 +13,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlin.math.cos
-import kotlin.math.min
-import kotlin.math.sin
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,6 +25,7 @@ fun StatsScreen(
     viewModel: StatsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val colors = MaterialTheme.colorScheme
 
     Scaffold(
         topBar = {
@@ -58,34 +55,20 @@ fun StatsScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Summary cards
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    SummaryCard("支出", state.totalExpense, colors.error, Modifier.weight(1f))
+                    SummaryCard("收入", state.totalIncome, colors.primary, Modifier.weight(1f))
                     SummaryCard(
-                        title = "支出",
-                        amount = state.totalExpense,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryCard(
-                        title = "收入",
-                        amount = state.totalIncome,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryCard(
-                        title = "结余",
-                        amount = state.totalIncome - state.totalExpense,
-                        color = if (state.totalIncome >= state.totalExpense)
-                            MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.error,
-                        modifier = Modifier.weight(1f)
+                        "结余",
+                        state.totalIncome - state.totalExpense,
+                        if (state.totalIncome >= state.totalExpense) colors.primary else colors.error,
+                        Modifier.weight(1f)
                     )
                 }
 
-                // Pie chart
                 if (state.categoryStats.isNotEmpty()) {
                     Text("支出分布", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -100,20 +83,14 @@ fun StatsScreen(
                             Spacer(Modifier.height(12.dp))
                             state.categoryStats.take(8).forEach { stat ->
                                 Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Box(
-                                        modifier = Modifier
-                                            .size(12.dp)
-                                            .padding(end = 8.dp)
+                                        modifier = Modifier.size(12.dp).padding(end = 8.dp)
                                     ) {
                                         Canvas(Modifier.fillMaxSize()) {
-                                            drawCircle(
-                                                color = Color(getStatColor(stat.colorIndex))
-                                            )
+                                            drawCircle(color = Color(getStatColor(stat.colorIndex)))
                                         }
                                     }
                                     Text(stat.categoryIcon, fontSize = 14.sp)
@@ -127,7 +104,7 @@ fun StatsScreen(
                                     Text(
                                         " %.1f%%".format(stat.percentage * 100),
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = colors.onSurfaceVariant
                                     )
                                 }
                             }
@@ -135,27 +112,19 @@ fun StatsScreen(
                     }
                 } else {
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("本月无支出记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                            Text("本月无支出记录", color = colors.onSurfaceVariant)
                         }
                     }
                 }
 
-                // Daily trend line chart
                 if (state.dailyStats.any { it.expense > 0 || it.income > 0 }) {
                     Text("每日趋势", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Card(modifier = Modifier.fillMaxWidth()) {
                         LineChart(
                             dailyStats = state.dailyStats,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp)
-                                .padding(16.dp)
+                            errorColor = colors.error,
+                            modifier = Modifier.fillMaxWidth().height(200.dp).padding(16.dp)
                         )
                     }
                 }
@@ -167,51 +136,33 @@ fun StatsScreen(
 }
 
 @Composable
-private fun SummaryCard(
-    title: String,
-    amount: Long,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
+private fun SummaryCard(title: String, amount: Long, color: Color, modifier: Modifier = Modifier) {
     Card(modifier = modifier) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+        Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(title, style = MaterialTheme.typography.labelSmall, color = color)
             Spacer(Modifier.height(4.dp))
-            Text(
-                "¥%,.0f".format(amount / 100.0),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
+            Text("¥%,.0f".format(amount / 100.0), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, color = color)
         }
     }
 }
 
 @Composable
-private fun PieChart(
-    stats: List<CategoryStat>,
-    modifier: Modifier = Modifier
-) {
+private fun PieChart(stats: List<CategoryStat>, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
-        val canvasSize = min(size.width, size.height)
+        val canvasSize = minOf(size.width, size.height)
         val radius = canvasSize / 2
         val center = Offset(size.width / 2, size.height / 2)
         var startAngle = -90f
-
         stats.forEach { stat ->
-            val sweepAngle = stat.percentage * 360f
             drawArc(
                 color = Color(getStatColor(stat.colorIndex)),
                 startAngle = startAngle,
-                sweepAngle = sweepAngle,
+                sweepAngle = stat.percentage * 360f,
                 useCenter = true,
                 topLeft = Offset(center.x - radius, center.y - radius),
                 size = Size(canvasSize, canvasSize)
             )
-            startAngle += sweepAngle
+            startAngle += stat.percentage * 360f
         }
     }
 }
@@ -219,10 +170,10 @@ private fun PieChart(
 @Composable
 private fun LineChart(
     dailyStats: List<DailyStat>,
+    errorColor: Color,
     modifier: Modifier = Modifier
 ) {
-    val maxExpense = dailyStats.maxOfOrNull { it.expense }?.toFloat() ?: 1f
-    val maxValue = maxOf(maxExpense, 1f)
+    val maxValue = maxOf(dailyStats.maxOfOrNull { it.expense }?.toFloat() ?: 1f, 1f)
 
     Canvas(modifier = modifier) {
         val width = size.width
@@ -231,44 +182,25 @@ private fun LineChart(
         val chartWidth = width - padding * 2
         val chartHeight = height - padding * 2
 
-        // Grid lines
         for (i in 0..4) {
             val y = padding + chartHeight * (1 - i / 4f)
-            drawLine(
-                color = Color.LightGray.copy(alpha = 0.3f),
-                start = Offset(padding, y),
-                end = Offset(width - padding, y),
-                strokeWidth = 1f
-            )
+            drawLine(Color.LightGray.copy(alpha = 0.3f), Offset(padding, y), Offset(width - padding, y), 1f)
         }
 
         if (dailyStats.isEmpty()) return@Canvas
 
-        // Expense line
         val path = Path()
         dailyStats.forEachIndexed { index, stat ->
             val x = padding + chartWidth * index / (dailyStats.size - 1).coerceAtLeast(1)
             val y = padding + chartHeight * (1 - stat.expense / maxValue)
             if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
+        drawPath(path, errorColor, style = Stroke(width = 2.5f))
 
-        drawPath(
-            path = path,
-            color = MaterialTheme.colorScheme.error,
-            style = Stroke(width = 2.5f)
-        )
-
-        // Points
         dailyStats.forEachIndexed { index, stat ->
             val x = padding + chartWidth * index / (dailyStats.size - 1).coerceAtLeast(1)
             val y = padding + chartHeight * (1 - stat.expense / maxValue)
-            if (stat.expense > 0) {
-                drawCircle(
-                    color = MaterialTheme.colorScheme.error,
-                    radius = 3f,
-                    center = Offset(x, y)
-                )
-            }
+            if (stat.expense > 0) drawCircle(errorColor, 3f, Offset(x, y))
         }
     }
 }

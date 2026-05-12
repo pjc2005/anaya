@@ -1,4 +1,5 @@
 package com.anaya.app.presentation.settings
+import androidx.hilt.navigation.compose.hiltViewModel
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -22,6 +23,7 @@ fun SettingsScreen(
     onNavigateToCategories: () -> Unit = {},
     onNavigateToAccounts: () -> Unit = {},
     onNavigateToSmartCapture: () -> Unit = {},
+    onNavigateToSavings: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     Scaffold(
