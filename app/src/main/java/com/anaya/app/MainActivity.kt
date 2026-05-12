@@ -43,39 +43,48 @@ fun AnayaMainScreen() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
+    // Screens that should show the bottom navigation bar
+    val bottomNavRoutes = Screen.bottomNavItems.map { it.route }
+
+    val showBottomBar = currentDestination?.route in bottomNavRoutes
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            NavigationBar {
-                Screen.bottomNavItems.forEach { screen ->
-                    val selected = currentDestination?.hierarchy?.any {
-                        it.route == screen.route
-                    } == true
+            if (showBottomBar) {
+                NavigationBar {
+                    Screen.bottomNavItems.forEach { screen ->
+                        val selected = currentDestination?.hierarchy?.any {
+                            it.route == screen.route
+                        } == true
 
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = {
-                            navController.navigate(screen.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(screen.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                                launchSingleTop = true
-                                restoreState = true
+                            },
+                            icon = {
+                                screen.icon?.let {
+                                    Icon(
+                                        imageVector = it,
+                                        contentDescription = screen.label
+                                    )
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = screen.label,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
                             }
-                        },
-                        icon = {
-                            Icon(
-                                imageVector = screen.icon,
-                                contentDescription = screen.label
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = screen.label,
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }

@@ -3,6 +3,7 @@ package com.anaya.app.presentation.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.anaya.app.domain.model.Account
+import com.anaya.app.domain.model.AccountType
 import com.anaya.app.domain.model.Category
 import com.anaya.app.domain.model.CategoryType
 import com.anaya.app.domain.repository.AccountRepository
@@ -140,6 +141,19 @@ class SettingsViewModel @Inject constructor(
     }
 
     // ── Account ──
+
+    fun addAccount(name: String, type: AccountType, initialBalance: Long) {
+        viewModelScope.launch {
+            accountRepository.insert(
+                Account(
+                    name = name,
+                    type = type,
+                    initialBalance = initialBalance,
+                    sortOrder = accounts.value.size + 1
+                )
+            )
+        }
+    }
 
     fun showAddAccountDialog() {
         _accountState.update {

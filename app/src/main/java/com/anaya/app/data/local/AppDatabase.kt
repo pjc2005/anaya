@@ -1,6 +1,8 @@
 package com.anaya.app.data.local
 
+import android.content.Context
 import androidx.room.Database
+import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.anaya.app.data.local.converter.Converters
@@ -29,4 +31,19 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun categoryDao(): CategoryDao
     abstract fun accountDao(): AccountDao
     abstract fun budgetDao(): BudgetDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        fun getInstance(context: Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "anaya_database"
+                ).build().also { INSTANCE = it }
+            }
+        }
+    }
 }

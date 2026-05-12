@@ -11,7 +11,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 sealed class Screen(
     val route: String,
     val label: String,
-    val icon: ImageVector
+    val icon: ImageVector? = null
 ) {
     data object Home : Screen(
         route = "home",
@@ -41,6 +41,21 @@ sealed class Screen(
         route = "settings",
         label = "设置",
         icon = Icons.Default.Settings
+    )
+
+    data object TransactionEditor : Screen(
+        route = "transaction/editor?transactionId={transactionId}",
+        label = "记一笔"
+    )
+
+    data object CategoryManager : Screen(
+        route = "settings/categories",
+        label = "分类管理"
+    )
+
+    data object AccountManager : Screen(
+        route = "settings/accounts",
+        label = "账户管理"
     )
 
     companion object {
