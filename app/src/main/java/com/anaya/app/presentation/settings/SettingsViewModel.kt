@@ -155,6 +155,7 @@ class SettingsViewModel @Inject constructor(
                     name = name,
                     type = type,
                     initialBalance = initialBalance,
+                    balance = initialBalance,
                     sortOrder = accounts.value.size + 1
                 )
             )

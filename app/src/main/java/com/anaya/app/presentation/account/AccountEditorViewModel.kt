@@ -92,7 +92,8 @@ class AccountEditorViewModel @Inject constructor(
                             id = accountId,
                             name = s.name,
                             type = s.type,
-                            initialBalance = balanceCents
+                            initialBalance = balanceCents,
+                            balance = balanceCents
                         )
                     )
                 }

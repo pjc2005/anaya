@@ -269,7 +269,7 @@ private fun AccountCard(
                         else MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "¥${CurrencyUtils.centsToDisplayString(account.initialBalance)}",
+                        text = "¥${CurrencyUtils.centsToDisplayString(account.balance)}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (archived) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.primary
