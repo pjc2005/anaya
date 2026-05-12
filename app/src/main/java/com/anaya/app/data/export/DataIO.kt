@@ -8,6 +8,7 @@ import com.anaya.app.data.local.dao.AccountDao
 import com.anaya.app.data.local.dao.CategoryDao
 import com.anaya.app.data.local.dao.TransactionDao
 import com.anaya.app.data.local.entity.TransactionEntity
+import com.anaya.app.data.local.entity.CategoryEntity
 import com.anaya.app.domain.model.Account
 import com.anaya.app.domain.model.Category
 import com.anaya.app.domain.model.Transaction
@@ -192,11 +193,14 @@ class DataExportImport @Inject constructor(
                 return@withContext SmartImportPreview(false, "文件内容为空")
             }
 
+            // 加载已有分类（用于智能匹配）
+            val existingCategories = categoryDao.getAllCategoriesSync()
+
             // 阶段一：JSON 数组解析（钱迹/QianJi 等 App 的导出格式）
             if (rawText.startsWith("[")) {
                 val jsonResult = tryParseJsonArray(rawText)
                 if (jsonResult.count > 0) {
-                    return@withContext jsonResult.copy(
+                    return@withContext resolveCategoryIds(jsonResult, existingCategories).copy(
                         message = "通过 JSON 解析识别了 ${jsonResult.count} 条交易记录"
                     )
                 }
@@ -205,7 +209,7 @@ class DataExportImport @Inject constructor(
             // 阶段二：启发式结构化解析（CSV / TSV / 分隔符文本）
             val structured = tryParseStructured(rawText)
             if (structured.count > 0) {
-                return@withContext structured.copy(
+                return@withContext resolveCategoryIds(structured, existingCategories).copy(
                     message = "通过结构化解析识别了 ${structured.count} 条交易记录"
                 )
             }
@@ -217,16 +221,19 @@ class DataExportImport @Inject constructor(
                     val entities = parsed.map { parsedToEntity(it) }
                     val errors = parsed.filter { it.amount == null }
                         .map { "无法解析金额：${it.note ?: it.merchant ?: "未知"}" }
-                    return@withContext SmartImportPreview(
-                        success = true,
-                        message = "通过AI模型识别了 ${entities.size} 条交易记录",
-                        transactions = entities,
-                        errors = errors
+                    return@withContext resolveCategoryIds(
+                        SmartImportPreview(
+                            success = true,
+                            message = "通过AI模型识别了 ${entities.size} 条交易记录",
+                            transactions = entities,
+                            errors = errors
+                        ),
+                        existingCategories
                     )
                 }
             }
 
-            // 阶段三：逐行正则回退
+            // 阶段四：逐行正则回退
             val lines = rawText.lines().filter { it.isNotBlank() && !isHeaderLine(it) }
             val parsed = lines.mapNotNull { line ->
                 val result = com.anaya.app.ml.RuleBasedParser.parsePaymentText(line)
@@ -234,10 +241,13 @@ class DataExportImport @Inject constructor(
             }
 
             if (parsed.isNotEmpty()) {
-                SmartImportPreview(
-                    success = true,
-                    message = "通过正则匹配识别了 ${parsed.size} 条交易记录",
-                    transactions = parsed
+                resolveCategoryIds(
+                    SmartImportPreview(
+                        success = true,
+                        message = "通过正则匹配识别了 ${parsed.size} 条交易记录",
+                        transactions = parsed
+                    ),
+                    existingCategories
                 )
             } else {
                 SmartImportPreview(
@@ -269,6 +279,72 @@ class DataExportImport @Inject constructor(
         }
 
     // ── 智能导入辅助方法 ──
+
+    /** 分类解析 — 从 note 中提取 "分类:xxx" 并匹配/创建分类 */
+    private suspend fun resolveCategoryIds(
+        preview: SmartImportPreview,
+        existingCategories: List<CategoryEntity>
+    ): SmartImportPreview {
+        if (preview.transactions.isEmpty()) return preview
+
+        val catMap = existingCategories.associateBy { it.name }
+        val createdCats = mutableListOf<CategoryEntity>()
+        var updatedCount = 0
+
+        val enriched = preview.transactions.map { tx ->
+            val note = tx.note ?: return@map tx
+            val prefix = "分类:"
+            val idx = note.indexOf(prefix)
+            if (idx < 0) return@map tx
+
+            // 提取分类名称（到行尾或下一个 |）
+            val afterPrefix = note.substring(idx + prefix.length)
+            val catName = afterPrefix.split(" | ", "|").first().trim().take(50)
+            if (catName.isBlank()) return@map tx
+
+            // 从已有分类中查找
+            val category = catMap[catName] ?: createdCats.find { it.name == catName }
+            val catId: Long
+
+            if (category != null) {
+                catId = category.id
+            } else {
+                // 创建新分类
+                val newCat = CategoryEntity(
+                    name = catName,
+                    type = when (tx.type) {
+                        "INCOME" -> "INCOME"
+                        "TRANSFER" -> "EXPENSE"
+                        else -> "EXPENSE"
+                    },
+                    icon = null
+                )
+                val newId = categoryDao.insert(newCat)
+                createdCats.add(newCat.copy(id = newId))
+                catId = newId
+            }
+
+            // 从 note 中移除 "分类:xxx"
+            val cleanedNote = note
+                .replace(Regex("""\s*\|\s*分类:$catName"""), "")
+                .replace(Regex("""分类:$catName\s*\|\s*"""), "")
+                .replace("分类:$catName", "")
+                .trim()
+                .takeIf { it.isNotBlank() }
+
+            updatedCount++
+            tx.copy(categoryId = catId, note = cleanedNote)
+        }
+
+        return if (updatedCount > 0) {
+            val catsCreated = createdCats.size
+            val extraMsg = if (catsCreated > 0) "，新建 $catsCreated 个分类" else ""
+            preview.copy(
+                transactions = enriched,
+                message = preview.message + extraMsg
+            )
+        } else preview
+    }
 
     /** 尝试 JSON 数组解析（钱迹等 App 的导出格式） */
     private fun tryParseJsonArray(text: String): SmartImportPreview {
