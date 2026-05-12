@@ -25,11 +25,11 @@ import javax.inject.Inject
  * 智能支付识别服务 — 参考"自动记账"的识别架构
  *
  * 工作流程：
- * 1. 监听支付 App 的窗口变化
- * 2. PlatformPageRecognizer 判断当前在哪个平台+页面类型
- * 3. 根据页面类型提取交易数据
- * 4. 对需要交互展开的页面（京东全部订单信息、美团支付方式等）
- *    延迟等待用户操作后再重新获取完整数据
+ * 1. 监听窗口变化事件
+ * 2. 根据 event.packageName 判断支付平台
+ * 3. 尝试 rootInActiveWindow 获取完整页面文本
+ * 4. 若 root 为 null（国产手机常见限制），改用 event.text 降级识别
+ * 5. 识别到支付完成后提取金额/商户，自动记账
  */
 @AndroidEntryPoint
 class PaymentAccessibilityService : AccessibilityService() {
@@ -40,11 +40,14 @@ class PaymentAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recognizer = PlatformPageRecognizer()
 
-    /** 上次识别到的页面类型（用于检测页面变化） */
+    /** 上次识别到的页面类型 */
     private var lastPageType: PageType = PageType.UNKNOWN
 
     /** 上次识别的时间戳（防重复触发） */
     private val lastCaptureTime = AtomicLong(0L)
+
+    /** 上次识别的平台（防重复触发） */
+    private var lastPlatformPkg: String = ""
 
     /** 等待用户点击展开的页面类型队列 */
     private var pendingPageType: PageType? = null
@@ -52,160 +55,166 @@ class PaymentAccessibilityService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        Log.i(TAG, "Service created")
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        val info = serviceInfo
-        info.apply {
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        // 不设置 packageNames 过滤器：国产 ROM 上过滤可能导致事件丢失
+        // 所有 App 的 TYPE_WINDOW_STATE_CHANGED 都会送达，我们在代码里过滤
+        serviceInfo.apply {
+            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            notificationTimeout = 300
-            // 覆盖所有主流支付平台
-            packageNames = arrayOf(
-                "com.tencent.mm",                           // 微信
-                "com.eg.android.AlipayGphone",                // 支付宝
-                "com.unionpay",                               // 云闪付
-                "com.jingdong.app.mall",                      // 京东
-                "com.sankuai.meituan",                        // 美团
-                "com.ss.android.ugc.aweme",                   // 抖音
-                "com.xunmeng.pinduoduo"                       // 拼多多
-            )
+            notificationTimeout = 500
         }
-        Log.i(TAG, "Service connected, monitoring all payment platforms")
+        Log.i(TAG, "Service connected, monitoring all window changes")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+        // 只处理窗口切换事件（每个新页面触发一次，性能开销最小）
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+
+        val pkg = event.packageName?.toString() ?: return
+        val platform = Platform.fromPackage(pkg)
+
+        // 非支付平台 → 跳过
+        if (platform == null) return
+
+        // 同平台防冲：200ms 内同一平台不重复处理
+        val now = System.currentTimeMillis()
+        if (pkg == lastPlatformPkg && now - lastCaptureTime.get() < 200) return
+        lastPlatformPkg = pkg
+
+        Log.d(TAG, "Window change: ${platform.label}, event text: ${event.text?.joinToString(" | ") ?: "(空)"}")
+
+        // 尝试获取窗口内容（国产手机上可能返回 null）
+        val root = rootInActiveWindow
+        val result: PageRecognition
+
+        if (root != null) {
+            try {
+                result = recognizer.recognize(root, platform)
+            } catch (e: Exception) {
+                Log.e(TAG, "Recognize from root failed", e)
+                return
+            } finally {
+                recycleNode(root)
+            }
+        } else {
+            // rootInActiveWindow = null（MIUI/HarmonyOS/ColorOS 常见）
+            // 使用 event.text 做降级识别
+            Log.d(TAG, "rootInActiveWindow is null, using event text fallback")
+            val eventText = event.text.joinToString("")
+            val eventDesc = event.contentDescription?.toString() ?: ""
+            result = recognizer.lightRecognize(platform, eventText, eventDesc)
+        }
+
+        Log.d(TAG, "Recognition: ${platform.label} → ${result.pageType.label} (conf=${result.confidence})")
+
+        // 跳过未知页面
+        if (result.pageType == PageType.UNKNOWN) {
+            lastPageType = PageType.UNKNOWN
             return
         }
 
-        val root = rootInActiveWindow ?: return
-
-        try {
-            val result = recognizer.recognize(root)
-
-            // 跳过未知页面
-            if (result.platform == null || result.pageType == PageType.UNKNOWN) {
-                lastPageType = PageType.UNKNOWN
-                return
+        when (result.pageType) {
+            PageType.ALL_ORDER_INFO,
+            PageType.PAYMENT_METHOD -> {
+                pendingPageType = result.pageType
+                lastPageType = result.pageType
             }
 
-            Log.d(TAG, "Detected: ${result.platform.label} / ${result.pageType.label}")
-
-            when (result.pageType) {
-                // ── 需要用户点击展开后等待下一页 ──
-                PageType.ALL_ORDER_INFO,
-                PageType.PAYMENT_METHOD -> {
-                    // 标记需要等待下一帧（用户点击后会跳转到详情页）
-                    pendingPageType = result.pageType
-                    lastPageType = result.pageType
+            PageType.PAYMENT_COMPLETE,
+            PageType.RED_PACKET,
+            PageType.TRANSFER,
+            PageType.ORDER_DETAIL -> {
+                // 有 pending 标记时走延迟捕获
+                if (result.pageType == PageType.ORDER_DETAIL && pendingPageType != null) {
+                    launchDelayedCapture(platform)
+                    pendingPageType = null
+                } else {
+                    capturePayment(result)
                 }
-
-                // ── 直接捕获的交易页面 ──
-                PageType.PAYMENT_COMPLETE -> {
-                    captureTransaction(result)
-                }
-
-                // ── 用户点击展开后到达的详情页 ──
-                PageType.ORDER_DETAIL -> {
-                    // 如果前一步是"全部订单信息"或"支付方式"，说明展开后到了详情
-                    if (pendingPageType != null) {
-                        // 延迟等页面渲染完成再抓取
-                        launchDelayedCapture(result)
-                        pendingPageType = null
-                    } else {
-                        captureTransaction(result)
-                    }
-                }
-
-                // ── 红包 / 转账 ──
-                PageType.RED_PACKET -> {
-                    captureTransaction(result)
-                }
-                PageType.TRANSFER -> {
-                    captureTransaction(result)
-                }
-
-                // ── 钱包-账单页 ──
-                PageType.WALLET_BILL -> {
-                    // 账单页数据量大，只提取最近一条
-                    captureTransaction(result)
-                }
-
-                PageType.UNKNOWN -> { /* 忽略 */ }
             }
 
-            lastPageType = result.pageType
+            PageType.WALLET_BILL -> capturePayment(result)
 
-        } catch (e: Exception) {
-            Log.e(TAG, "Recognition failed", e)
-        } finally {
-            recycleNode(root)
+            PageType.UNKNOWN -> { /* ignore */ }
         }
+
+        lastPageType = result.pageType
     }
 
     /**
-     * 捕获交易数据
+     * 捕获支付数据
      */
-    private fun captureTransaction(result: PageRecognition) {
-        // 防重复：2秒内同平台同页面不重复触发
+    private fun capturePayment(result: PageRecognition) {
+        // 防重复：2秒内同平台不重复触发
         val now = System.currentTimeMillis()
         if (now - lastCaptureTime.get() < 2000) return
         lastCaptureTime.set(now)
 
+        val pageText = result.pageText
+        if (pageText.isBlank()) {
+            Log.w(TAG, "Page text is blank, cannot extract payment info")
+            return
+        }
+
         scope.launch {
-            // 1. 先用规则解析器快速提取
-            val parsed = RuleBasedParser.parsePaymentText(result.pageText)
+            try {
+                // 1. 先用规则解析器快速提取
+                val parsed = RuleBasedParser.parsePaymentText(pageText)
+                Log.d(TAG, "Rule parse: amount=${parsed.amount}, merchant=${parsed.merchant}, conf=${parsed.confidence}")
 
-            // 2. 如果有本地模型，用模型做二次精确解析
-            val finalParsed = if (localModel.isModelLoaded() && parsed.confidence < 0.8f) {
-                val mlResult = localModel.parsePaymentText(result.pageText)
-                // 取置信度更高的结果
-                if (mlResult.confidence > parsed.confidence) mlResult else parsed
-            } else parsed
+                // 2. 如果有本地模型，用模型做二次精确解析
+                val finalParsed = if (localModel.isModelLoaded() && parsed.confidence < 0.8f) {
+                    val mlResult = localModel.parsePaymentText(pageText)
+                    if (mlResult.confidence > parsed.confidence) mlResult else parsed
+                } else parsed
 
-            if (finalParsed.amount != null || finalParsed.merchant != null) {
-                val resultWithPlatform = finalParsed.copy(
-                    note = finalParsed.note
-                        ?: "[${result.platform?.label}][${result.pageType.label}]"
-                )
-                eventBus.emit(resultWithPlatform)
+                if (finalParsed.amount != null || finalParsed.merchant != null) {
+                    val resultWithPlatform = finalParsed.copy(
+                        note = finalParsed.note
+                            ?: "[${result.platform?.label}][${result.pageType.label}]"
+                    )
+                    eventBus.emit(resultWithPlatform)
 
-                val amountStr = resultWithPlatform.amount?.let {
-                    "%.2f元".format(it / 100.0)
-                } ?: ""
-                val merchantStr = resultWithPlatform.merchant ?: ""
-                Log.i(TAG, "Detected: ${result.platform?.label} $merchantStr $amountStr → auto-saved")
-                showNotification(
-                    "已自动记账 [${result.platform?.label}]",
-                    "$merchantStr $amountStr"
-                )
-            } else {
-                Log.w(TAG, "Detected ${result.platform?.label} but no amount/merchant extracted: ${result.pageText.take(80)}")
+                    val amountStr = finalParsed.amount?.let {
+                        "%.2f元".format(it / 100.0)
+                    } ?: ""
+                    val merchantStr = finalParsed.merchant ?: ""
+                    Log.i(TAG, "Auto-saved: ${result.platform?.label} $merchantStr $amountStr")
+                    showNotification(
+                        "已自动记账 [${result.platform?.label}]",
+                        "$merchantStr $amountStr"
+                    )
+                } else {
+                    Log.w(TAG, "No amount/merchant extracted from: ${pageText.take(100)}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "capturePayment failed", e)
             }
         }
     }
 
     /**
      * 延迟捕获 — 用于用户展开详情后的页面
-     * 等页面加载完（1.5s）再抓取完整信息
+     * 等页面加载完（1.5s）再抓取
      */
-    private fun launchDelayedCapture(result: PageRecognition) {
+    private fun launchDelayedCapture(platform: Platform) {
         scope.launch {
             delay(1500)
-            // 重新获取当前页面信息
-            val newRoot = rootInActiveWindow ?: return@launch
-            try {
-                val newResult = recognizer.recognize(newRoot)
-                if (newResult.pageType == PageType.ORDER_DETAIL ||
-                    newResult.pageType == PageType.PAYMENT_COMPLETE) {
-                    captureTransaction(newResult)
+            val newRoot = rootInActiveWindow
+            if (newRoot != null) {
+                try {
+                    val result = recognizer.recognize(newRoot, platform)
+                    if (result.pageType == PageType.ORDER_DETAIL ||
+                        result.pageType == PageType.PAYMENT_COMPLETE) {
+                        capturePayment(result)
+                    }
+                } finally {
+                    recycleNode(newRoot)
                 }
-            } finally {
-                recycleNode(newRoot)
             }
         }
     }

@@ -1,9 +1,10 @@
 package com.anaya.app.service
 
+import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * 平台枚举 — 覆盖自动记账支持的所有支付平台
+ * 平台枚举
  */
 enum class Platform(val packageName: String, val label: String) {
     WECHAT("com.tencent.mm", "微信"),
@@ -18,7 +19,6 @@ enum class Platform(val packageName: String, val label: String) {
         fun fromPackage(pkg: String): Platform? =
             entries.find { it.packageName == pkg }
 
-        /** 设置向导用的识别说明列表 */
         val guideEntries: List<Pair<String, String>> = listOf(
             "微信"     to "发红包后需点开红包才能识别",
             "支付宝"   to "支付完成后自动识别",
@@ -32,7 +32,7 @@ enum class Platform(val packageName: String, val label: String) {
 }
 
 /**
- * 页面类型 — 描述当前处于支付流程的哪个场景
+ * 页面类型
  */
 enum class PageType(val label: String) {
     PAYMENT_COMPLETE("支付完成页"),
@@ -52,43 +52,28 @@ data class PageRecognition(
     val platform: Platform?,
     val pageType: PageType,
     val confidence: Float,
-    val pageText: String,            // 页面全部可见文本，用于后续数据提取
-    val clickableTexts: List<String> // 可交互按钮的文本
+    val pageText: String,
+    val clickableTexts: List<String>
 )
 
 /**
- * 平台页面识别器 — 参考自动记账的识别方式
+ * 平台页面识别器
  *
- * 核心思路：
- * 1. 通过 AccessibilityNodeInfo 的 packageName 判断平台
- * 2. 收集页面上所有文本 + 可点击按钮文本
- * 3. 根据平台+文本特征判断页面类型
+ * 双模式识别：
+ * 1. 完整模式 (recognize) — 需要 AccessibilityNodeInfo root，扫描全部文本
+ * 2. 轻量模式 (lightRecognize) — 使用 event.text，国产 ROM 降级方案
  */
 class PlatformPageRecognizer {
 
     /**
-     * 识别入口
-     * @param root 当前窗口的 AccessibilityNodeInfo 根节点
+     * 完整识别 — 从 AccessibilityNodeInfo 扫描页面全部文本
      */
-    fun recognize(root: AccessibilityNodeInfo): PageRecognition {
-        val pkg = root.packageName?.toString() ?: ""
-        val platform = Platform.fromPackage(pkg)
-
-        if (platform == null) {
-            return PageRecognition(
-                platform = null,
-                pageType = PageType.UNKNOWN,
-                confidence = 0f,
-                pageText = "",
-                clickableTexts = emptyList()
-            )
-        }
-
+    fun recognize(root: AccessibilityNodeInfo, platform: Platform): PageRecognition {
         val visibleTexts = collectVisibleText(root)
         val clickableTexts = collectClickableTexts(root)
         val pageText = visibleTexts.joinToString("\n")
 
-        val pageType = identifyPageType(platform, visibleTexts, clickableTexts)
+        val pageType = identifyPageType(platform, visibleTexts, clickableTexts, pageText)
 
         return PageRecognition(
             platform = platform,
@@ -96,6 +81,28 @@ class PlatformPageRecognizer {
             confidence = if (pageType == PageType.UNKNOWN) 0f else 0.85f,
             pageText = pageText,
             clickableTexts = clickableTexts
+        )
+    }
+
+    /**
+     * 轻量识别 — 使用 event.text 降级识别
+     * 适用于 rootInActiveWindow 为 null 的国产手机
+     */
+    fun lightRecognize(
+        platform: Platform,
+        eventText: String,
+        eventDesc: String
+    ): PageRecognition {
+        val combined = "$eventText $eventDesc".trim()
+
+        val pageType = detectPageFromFragment(platform, combined)
+
+        return PageRecognition(
+            platform = platform,
+            pageType = pageType,
+            confidence = if (pageType == PageType.UNKNOWN) 0f else 0.7f,
+            pageText = combined,
+            clickableTexts = emptyList()
         )
     }
 
@@ -115,7 +122,6 @@ class PlatformPageRecognizer {
 
     private fun collectClickableTexts(node: AccessibilityNodeInfo): List<String> {
         val result = mutableListOf<String>()
-        // 可点击且子节点数为 0 的文本按钮
         if (node.isClickable && node.text != null) {
             result.add(node.text.toString())
         }
@@ -125,35 +131,30 @@ class PlatformPageRecognizer {
         return result
     }
 
-    // ── 按平台+文本特征匹配页面类型 ──
+    // ── 完整页面识别 ──
 
     private fun identifyPageType(
         platform: Platform,
         texts: List<String>,
-        clickableTexts: List<String>
+        clickableTexts: List<String>,
+        pageText: String
     ): PageType {
-        val full = texts.joinToString("")
+        val full = pageText
         val clicks = clickableTexts.joinToString("")
 
-        // 通用检测：检测页面是否有金额信息 + 完成按钮（强支付完成信号）
-        val hasAmount = Regex("[¥￥]?\\s*\\d+(\\.\\d{1,2})?\\s*元?").containsMatchIn(full)
-        val hasDoneButton = clicks.contains("完成")
-        val paymentKeywords = listOf("支付成功", "付款成功", "交易成功", "支付完成",
-            "交易已完成", "您已成功付款", "支付结果", "已完成")
-        val hasPaymentKeyword = paymentKeywords.any { full.contains(it) }
-        val isPaymentComplete = hasPaymentKeyword || (hasAmount && hasDoneButton)
+        val isPaymentComplete = isPaymentCompletePage(full, clicks)
 
         return when (platform) {
             Platform.WECHAT -> when {
                 "红包" in full && ("查看红包" in full || "开" in texts) -> PageType.RED_PACKET
                 "转账给你" in full || "确认收款" in full -> PageType.TRANSFER
-                isPaymentComplete || "支付成功" in full || "交易成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
                 "账单" in full && "本月" in full -> PageType.WALLET_BILL
                 else -> PageType.UNKNOWN
             }
 
             Platform.ALIPAY -> when {
-                isPaymentComplete || "支付成功" in full || "付款成功" in full || "交易成功" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
                 "账单" in full && ("收支" in full || "月" in full) -> PageType.WALLET_BILL
                 "转账" in full && "确认" in full -> PageType.TRANSFER
                 else -> PageType.UNKNOWN
@@ -168,7 +169,7 @@ class PlatformPageRecognizer {
 
             Platform.JD -> when {
                 "全部订单信息" in clicks -> PageType.ALL_ORDER_INFO
-                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
                 "订单详情" in full -> PageType.ORDER_DETAIL
                 "账单" in full || "钱包" in full -> PageType.WALLET_BILL
                 else -> PageType.UNKNOWN
@@ -176,23 +177,72 @@ class PlatformPageRecognizer {
 
             Platform.MEITUAN -> when {
                 "支付方式" in clicks || "支付方式" in full -> PageType.PAYMENT_METHOD
-                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
                 "订单详情" in full -> PageType.ORDER_DETAIL
                 "账单" in full || "钱包" in full -> PageType.WALLET_BILL
                 else -> PageType.UNKNOWN
             }
 
             Platform.DOUYIN -> when {
-                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
                 else -> PageType.UNKNOWN
             }
 
             Platform.PDD -> when {
                 "查看更多订单和优惠信息" in clicks -> PageType.ALL_ORDER_INFO
                 "订单详情" in full -> PageType.ORDER_DETAIL
-                isPaymentComplete || "支付成功" in full || "支付完成" in full -> PageType.PAYMENT_COMPLETE
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
                 else -> PageType.UNKNOWN
             }
         }
+    }
+
+    /**
+     * 从 event 片段文本识别页面类型
+     * TYPE_WINDOW_STATE_CHANGED 的 event.text 通常是 Activity 标题
+     */
+    private fun detectPageFromFragment(
+        platform: Platform,
+        text: String
+    ): PageType {
+        val isPayment = listOf("支付成功", "付款成功", "交易成功", "支付完成",
+            "交易已完成", "您已成功付款", "支付结果", "已完成", "成功")
+            .any { text.contains(it) }
+
+        if (isPayment) return PageType.PAYMENT_COMPLETE
+
+        return when (platform) {
+            Platform.WECHAT -> when {
+                "红包" in text -> PageType.RED_PACKET
+                "转账" in text -> PageType.TRANSFER
+                "账单" in text -> PageType.WALLET_BILL
+                "订单" in text || "详情" in text -> PageType.ORDER_DETAIL
+                text.contains(Regex("[¥￥]?\\d+(\\.\\d{1,2})?")) -> PageType.PAYMENT_COMPLETE
+                else -> PageType.UNKNOWN
+            }
+            Platform.ALIPAY -> when {
+                "账单" in text -> PageType.WALLET_BILL
+                "转账" in text -> PageType.TRANSFER
+                text.contains(Regex("[¥￥]?\\d+(\\.\\d{1,2})?")) -> PageType.PAYMENT_COMPLETE
+                "订单" in text || "详情" in text -> PageType.ORDER_DETAIL
+                else -> PageType.UNKNOWN
+            }
+            else -> when {
+                text.contains(Regex("[¥￥]?\\d+(\\.\\d{1,2})?")) -> PageType.PAYMENT_COMPLETE
+                else -> PageType.UNKNOWN
+            }
+        }
+    }
+
+    /**
+     * 判断是否为支付完成页（通用检测）
+     */
+    private fun isPaymentCompletePage(full: String, clicks: String): Boolean {
+        val hasAmount = Regex("[¥￥]?\\s*\\d+(\\.\\d{1,2})?\\s*元?").containsMatchIn(full)
+        val hasDoneButton = clicks.contains("完成")
+        val paymentKeywords = listOf("支付成功", "付款成功", "交易成功", "支付完成",
+            "交易已完成", "您已成功付款", "支付结果", "已完成")
+        val hasPaymentKeyword = paymentKeywords.any { full.contains(it) }
+        return hasPaymentKeyword || (hasAmount && hasDoneButton)
     }
 }
