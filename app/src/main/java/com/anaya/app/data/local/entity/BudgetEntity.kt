@@ -9,7 +9,9 @@ data class BudgetEntity(
     val id: Long = 0,
     val categoryId: Long,
     val amount: Long,
+    val period: String = "MONTHLY",
     val startDate: Long,
     val endDate: Long,
+    val alertThreshold: Int = 80,
     val note: String? = null
 )

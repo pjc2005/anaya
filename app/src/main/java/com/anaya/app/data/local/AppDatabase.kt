@@ -2,6 +2,8 @@ package com.anaya.app.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
+import com.anaya.app.data.local.converter.Converters
 import com.anaya.app.data.local.dao.AccountDao
 import com.anaya.app.data.local.dao.BudgetDao
 import com.anaya.app.data.local.dao.CategoryDao
@@ -21,6 +23,7 @@ import com.anaya.app.data.local.entity.TransactionEntity
     version = 1,
     exportSchema = false
 )
+@TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun transactionDao(): TransactionDao
     abstract fun categoryDao(): CategoryDao

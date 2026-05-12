@@ -1,14 +1,9 @@
-package com.anaya.app.data.local.entity
+package com.anaya.app.domain.model
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
-
-@Entity(tableName = "transactions")
-data class TransactionEntity(
-    @PrimaryKey(autoGenerate = true)
+data class Transaction(
     val id: Long = 0,
     val amount: Long,
-    val type: String,
+    val type: TransactionType,
     val categoryId: Long,
     val accountId: Long,
     val targetAccountId: Long? = null,
@@ -17,3 +12,9 @@ data class TransactionEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
+
+enum class TransactionType {
+    INCOME,
+    EXPENSE,
+    TRANSFER
+}
