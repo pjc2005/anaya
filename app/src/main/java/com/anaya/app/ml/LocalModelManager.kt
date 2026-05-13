@@ -152,7 +152,14 @@ class LocalModelManager @Inject constructor(
      * 检查模型状态 — 兼容旧 UI 调用
      */
     fun checkModelStatus() {
-        _modelStatus.value = if (httpAvailable) ModelStatus.Ready else ModelStatus.NotDownloaded
+        val status = when {
+            httpAvailable -> ModelStatus.Ready
+            _serverStatus.value == LlamaServerStatus.Starting -> ModelStatus.Downloading
+            // 模型文件已在磁盘上（资产已解压）→ 服务正在 AnayaApp 启动中
+            File(getModelFilePath(context)).exists() -> ModelStatus.Downloading
+            else -> ModelStatus.NotDownloaded
+        }
+        _modelStatus.value = status
     }
 
     /**

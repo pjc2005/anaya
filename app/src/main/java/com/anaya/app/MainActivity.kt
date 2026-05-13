@@ -64,8 +64,8 @@ class MainActivity : ComponentActivity() {
                         // 加载中，可显示闪屏
                     }
                     false -> {
-                        // 设置未完成 → 进入设置向导
-                        SetupNavHost()
+                        // 设置未完成 → 进入设置向导，完成后回调通知主界面
+                        SetupNavHost(onSetupComplete = { isSetupComplete = true })
                     }
                     true -> {
                         // 正常主界面
@@ -78,12 +78,13 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun SetupNavHost() {
+private fun SetupNavHost(onSetupComplete: () -> Unit) {
     val navController = rememberNavController()
     NavGraph(
         navController = navController,
         startDestination = Screen.Setup.route,
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.fillMaxSize(),
+        onSetupComplete = onSetupComplete
     )
 }
 

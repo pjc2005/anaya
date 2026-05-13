@@ -26,7 +26,8 @@ import com.anaya.app.presentation.transaction.editor.TransactionEditorScreen
 fun NavGraph(
     navController: NavHostController,
     modifier: Modifier = Modifier,
-    startDestination: String = Screen.Home.route
+    startDestination: String = Screen.Home.route,
+    onSetupComplete: (() -> Unit)? = null
 ) {
     NavHost(
         navController = navController,
@@ -148,8 +149,14 @@ fun NavGraph(
         composable(Screen.Setup.route) {
             SetupScreen(
                 onSetupComplete = {
-                    navController.navigate(Screen.Home.route) {
-                        popUpTo(Screen.Setup.route) { inclusive = true }
+                    if (onSetupComplete != null) {
+                        // 来自 SetupNavHost — 通知 MainActivity 切换到主界面
+                        onSetupComplete()
+                    } else {
+                        // 来自 AnayaMainScreen (正常情况下不该触发)
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.Setup.route) { inclusive = true }
+                        }
                     }
                 }
             )
