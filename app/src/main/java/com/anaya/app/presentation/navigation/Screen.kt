@@ -83,6 +83,11 @@ sealed class Screen(
         label = "编辑账户"
     )
 
+    data object AutoCaptureLog : Screen(
+        route = "auto_capture_log",
+        label = "检测日志"
+    )
+
     companion object {
         val bottomNavItems = listOf(Home, Transactions, Stats, Budget, Settings)
     }

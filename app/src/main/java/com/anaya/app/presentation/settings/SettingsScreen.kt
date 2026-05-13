@@ -38,6 +38,7 @@ fun SettingsScreen(
     onNavigateToSmartCapture: () -> Unit = {},
     onNavigateToExportImport: () -> Unit = {},
     onNavigateToSavings: () -> Unit = {},
+    onNavigateToAutoCaptureLog: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -119,6 +120,14 @@ fun SettingsScreen(
                 title = "智能捕获",
                 subtitle = "剪贴板监听 & 自动识别支付信息",
                 onClick = onNavigateToSmartCapture
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+
+            SettingsItem(
+                icon = Icons.Default.Info,
+                title = "检测日志",
+                subtitle = "查看支付检测的三层降级记录",
+                onClick = onNavigateToAutoCaptureLog
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
 

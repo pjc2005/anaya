@@ -14,6 +14,7 @@ import com.anaya.app.presentation.settings.AccountManagerScreen
 import com.anaya.app.presentation.settings.CategoryManagerScreen
 import com.anaya.app.presentation.settings.SettingsScreen
 import com.anaya.app.presentation.settings.ExportImportScreen
+import com.anaya.app.presentation.settings.AutoCaptureLogScreen
 import com.anaya.app.presentation.smartcapture.SmartCaptureScreen
 import com.anaya.app.presentation.savings.SavingsScreen
 import com.anaya.app.presentation.setup.SetupScreen
@@ -86,6 +87,9 @@ fun NavGraph(
                 },
                 onNavigateToExportImport = {
                     navController.navigate(Screen.ExportImport.route)
+                },
+                onNavigateToAutoCaptureLog = {
+                    navController.navigate(Screen.AutoCaptureLog.route)
                 }
             )
         }
@@ -133,6 +137,12 @@ fun NavGraph(
 
         composable(Screen.Savings.route) {
             SavingsScreen()
+        }
+
+        composable(Screen.AutoCaptureLog.route) {
+            AutoCaptureLogScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
         }
 
         composable(Screen.Setup.route) {

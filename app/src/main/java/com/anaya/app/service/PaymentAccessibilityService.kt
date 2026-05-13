@@ -24,6 +24,7 @@ import com.anaya.app.domain.repository.TransactionRepository
 import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.RuleBasedClassifier
 import com.anaya.app.ml.RuleBasedParser
+import com.anaya.app.util.CaptureLogManager
 import android.content.ClipboardManager
 import android.content.Context
 import dagger.hilt.android.AndroidEntryPoint
@@ -207,6 +208,11 @@ class PaymentAccessibilityService : AccessibilityService() {
             val parsed = RuleBasedParser.parsePaymentText(eventText)
             if (parsed.amount != null && parsed.amount > 0 && parsed.confidence >= 0.5f) {
                 Log.i(TAG, "${platform.label}: layer2 fallback parsed amount=${parsed.amount / 100.0}")
+                CaptureLogManager.log(
+                    platform = platform.label, amount = parsed.amount,
+                    merchant = parsed.merchant, layer = 2, source = "accessibility",
+                    confidence = parsed.confidence
+                )
                 scope.launch { autoSaveFallback(platform, parsed.amount, parsed.merchant) }
                 return
             }
@@ -219,6 +225,11 @@ class PaymentAccessibilityService : AccessibilityService() {
                 val ocrResult = screenshotFallback.captureAndOcr(ocrProcessor)
                 if (ocrResult != null && ocrResult.amount != null && ocrResult.amount > 0) {
                     Log.i(TAG, "${platform.label}: layer3 OCR matched amount=${ocrResult.amount / 100.0}")
+                    CaptureLogManager.log(
+                        platform = platform.label, amount = ocrResult.amount,
+                        merchant = ocrResult.merchant, layer = 3, source = "ocr",
+                        confidence = ocrResult.confidence
+                    )
                     autoSaveFallback(platform, ocrResult.amount, ocrResult.merchant)
                 } else {
                     Log.d(TAG, "${platform.label}: all 3 layers failed -- no payment detected")
@@ -274,6 +285,12 @@ class PaymentAccessibilityService : AccessibilityService() {
         }
 
         Log.i(TAG, "Payment detected: ${platform.label} ${result.merchant ?: ""} ${amount / 100.0}元 (rule: ${result.rule.name})")
+
+        CaptureLogManager.log(
+            platform = platform.label, amount = amount,
+            merchant = result.merchant, layer = 1, source = "accessibility",
+            confidence = result.rule.confidence
+        )
 
         // 加载数据（在 IO 线程）
         val categories = categoryRepository.getAllCategories().first()
@@ -479,6 +496,11 @@ class PaymentAccessibilityService : AccessibilityService() {
             val parsed = RuleBasedParser.parsePaymentText(text)
             if (parsed.amount != null && parsed.amount > 0) {
                 Log.i(TAG, "Clipboard payment detected: ${parsed.amount / 100.0}元")
+                CaptureLogManager.log(
+                    platform = "剪贴板", amount = parsed.amount,
+                    merchant = parsed.merchant, layer = 0, source = "clipboard",
+                    confidence = parsed.confidence
+                )
 
                 // 直接自动记账
                 scope.launch {
