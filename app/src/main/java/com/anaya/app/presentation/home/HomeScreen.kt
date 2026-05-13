@@ -87,6 +87,29 @@ fun HomeScreen(
                     }
                 }
 
+                // ── Total Balance Card ──
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                SummaryItem("总收入", "¥%,.2f".format(state.totalIncome / 100.0), MaterialTheme.colorScheme.primary)
+                                SummaryItem("总支出", "¥%,.2f".format(state.totalExpense / 100.0), MaterialTheme.colorScheme.error)
+                                SummaryItem("总余额", "¥%,.2f".format(state.totalBalance / 100.0),
+                                    if (state.totalBalance >= 0) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+
                 // ── Recent Transactions ──
                 item {
                     Text(

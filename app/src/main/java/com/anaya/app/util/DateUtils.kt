@@ -53,6 +53,39 @@ fun formatDateYearMonth(timestamp: Long): String {
     return sdf.format(Date(timestamp))
 }
 
+fun getQuarterStartMillis(year: Int, quarter: Int): Long {
+    val startMonth = (quarter - 1) * 3 + 1
+    val cal = Calendar.getInstance()
+    cal.set(year, startMonth - 1, 1, 0, 0, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    return cal.timeInMillis
+}
+
+fun getQuarterEndMillis(year: Int, quarter: Int): Long {
+    val startMonth = (quarter - 1) * 3 + 1
+    val cal = Calendar.getInstance()
+    cal.set(year, startMonth - 1, 1, 0, 0, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    cal.add(Calendar.MONTH, 3)
+    cal.add(Calendar.MILLISECOND, -1)
+    return cal.timeInMillis
+}
+
+fun getYearStartMillis(year: Int): Long {
+    val cal = Calendar.getInstance()
+    cal.set(year, 0, 1, 0, 0, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    return cal.timeInMillis
+}
+
+fun getYearEndMillis(year: Int): Long {
+    val cal = Calendar.getInstance()
+    cal.set(year + 1, 0, 1, 0, 0, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    cal.add(Calendar.MILLISECOND, -1)
+    return cal.timeInMillis
+}
+
 fun getTodayStartMillis(): Long {
     val cal = Calendar.getInstance()
     cal.set(Calendar.HOUR_OF_DAY, 0)

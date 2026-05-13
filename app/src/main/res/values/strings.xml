@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Anaya</string>
     <string name="accessibility_service_description">Anaya记账自动识别服务——监听支付应用的通知和页面变化，自动捕获消费信息</string>
+    <string name="fgs_payment_detection">Anaya前台服务用于持续监听支付应用的页面变化和通知，自动识别并记录消费信息。这是核心功能所必需的，关闭后将无法自动记账。</string>
 </resources>

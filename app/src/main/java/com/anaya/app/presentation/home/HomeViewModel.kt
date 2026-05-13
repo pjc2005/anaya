@@ -21,6 +21,9 @@ data class HomeUiState(
     val monthIncome: Long = 0,
     val monthExpense: Long = 0,
     val monthBalance: Long = 0,
+    val totalIncome: Long = 0,
+    val totalExpense: Long = 0,
+    val totalBalance: Long = 0,
     val recentTransactions: List<TransactionDisplay> = emptyList(),
     val isLoading: Boolean = true
 )
@@ -59,12 +62,17 @@ class HomeViewModel @Inject constructor(
     val uiState: StateFlow<HomeUiState> = combine(
         transactionRepository.getTransactionsByDateRange(monthStart, monthEnd),
         transactionRepository.getAllTransactions().map { list -> list.take(5) },
+        transactionRepository.getAllTransactions(),
         categories,
         accounts
-    ) { monthTx, recentTx, cats, accts ->
+    ) { monthTx, recentTx, allTx, cats, accts ->
         // 转账不计入收支统计
         val income = monthTx.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
         val expense = monthTx.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
+
+        // 总账单
+        val totalIncome = allTx.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
+        val totalExpense = allTx.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
 
         val recentDisplays = recentTx.map { tx ->
             val category = cats.find { it.id == tx.categoryId }
@@ -91,6 +99,9 @@ class HomeViewModel @Inject constructor(
             monthIncome = income,
             monthExpense = expense,
             monthBalance = income - expense,
+            totalIncome = totalIncome,
+            totalExpense = totalExpense,
+            totalBalance = totalIncome - totalExpense,
             recentTransactions = recentDisplays,
             isLoading = false
         )

@@ -16,6 +16,7 @@ import com.anaya.app.domain.model.TransactionType
 import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.domain.repository.TransactionRepository
+import com.anaya.app.ml.IconSuggestions
 import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -361,10 +362,11 @@ class DataExportImport @Inject constructor(
             if (suggestedParent != null && suggestedParent in parentNames) {
                 // 创建"父/子"分类
                 val newCatName = "$suggestedParent/$catName"
+                val newCatIcon = IconSuggestions.suggestIconForCategory(newCatName)
                 val newCat = CategoryEntity(
                     name = newCatName, type = when (tx.type) {
                         "INCOME" -> "INCOME"; else -> "EXPENSE"
-                    }, icon = null
+                    }, icon = newCatIcon
                 )
                 val newId = categoryDao.insert(newCat)
                 createdCats.add(newCat.copy(id = newId))
@@ -396,10 +398,11 @@ class DataExportImport @Inject constructor(
             }
 
             // ── 策略 5: 直接创建为独立分类 ──
+            val newCatIcon = IconSuggestions.suggestIconForCategory(catName)
             val newCat = CategoryEntity(
                 name = catName, type = when (tx.type) {
                     "INCOME" -> "INCOME"; else -> "EXPENSE"
-                }, icon = null
+                }, icon = newCatIcon
             )
             val newId = categoryDao.insert(newCat)
             createdCats.add(newCat.copy(id = newId))

@@ -65,7 +65,7 @@ abstract class AppModule {
                 context,
                 AppDatabase::class.java,
                 "anaya_database"
-            ).build()
+            ).fallbackToDestructiveMigration().build()
         }
 
         @Provides

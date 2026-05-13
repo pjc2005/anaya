@@ -75,6 +75,16 @@ class TransactionRepositoryImpl @Inject constructor(
         transactionDao.deleteById(id)
     }
 
+    override suspend fun deleteAll() {
+        // Reset all account balances to initialBalance
+        val accounts = accountDao.getAllAccountsSync()
+        accounts.forEach { account ->
+            accountDao.updateBalance(account.id, account.initialBalance)
+        }
+        // Delete all transactions
+        transactionDao.deleteAll()
+    }
+
     private suspend fun updateBalancesForInsert(tx: Transaction) {
         when (tx.type) {
             TransactionType.INCOME -> {

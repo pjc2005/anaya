@@ -1,16 +1,24 @@
 package com.anaya.app.presentation.settings
 
+import android.net.Uri
+import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.anaya.app.data.backup.BackupManager
 import com.anaya.app.domain.model.Account
 import com.anaya.app.domain.model.AccountType
 import com.anaya.app.domain.model.Category
 import com.anaya.app.domain.model.CategoryType
 import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.CategoryRepository
+import com.anaya.app.domain.repository.TransactionRepository
 import com.anaya.app.ml.LocalModelManager
 import com.anaya.app.ml.ModelStatus
+import com.anaya.app.presentation.theme.ThemeMode
+import com.anaya.app.presentation.theme.ThemePreferencesManager
+import com.anaya.app.presentation.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -37,11 +45,26 @@ data class AccountSettingsState(
 class SettingsViewModel @Inject constructor(
     private val categoryRepository: CategoryRepository,
     private val accountRepository: AccountRepository,
-    private val localModel: LocalModelManager
+    private val transactionRepository: TransactionRepository,
+    private val localModel: LocalModelManager,
+    private val themePrefs: ThemePreferencesManager,
+    private val backupManager: BackupManager,
+    @ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
     val modelStatus: StateFlow<ModelStatus> = localModel.modelStatus
     val downloadProgress: StateFlow<Int> = localModel.downloadProgress
+
+    // Theme
+    private val _themeMode = MutableStateFlow(themePrefs.getThemeMode())
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    // Backup/Restore state
+    private val _backupResult = MutableSharedFlow<String>()
+    val backupResult: SharedFlow<String> = _backupResult.asSharedFlow()
+
+    private val _isDeletingAll = MutableStateFlow(false)
+    val isDeletingAll: StateFlow<Boolean> = _isDeletingAll.asStateFlow()
 
     private val _categoryState = MutableStateFlow(CategorySettingsState())
     val categoryState: StateFlow<CategorySettingsState> = _categoryState.asStateFlow()
@@ -69,6 +92,46 @@ class SettingsViewModel @Inject constructor(
                 _categoryState.update {
                     it.copy(categories = cats)
                 }
+            }
+        }
+    }
+
+    // ── Theme ──
+
+    fun cycleTheme() {
+        val next = when (_themeMode.value) {
+            ThemeMode.SYSTEM -> ThemeMode.LIGHT
+            ThemeMode.LIGHT -> ThemeMode.DARK
+            ThemeMode.DARK -> ThemeMode.SYSTEM
+        }
+        _themeMode.value = next
+        ThemeState.set(next)
+        themePrefs.setThemeMode(next)
+    }
+
+    // ── Backup/Restore ──
+
+    fun backupData() {
+        viewModelScope.launch {
+            _backupResult.emit("backup_started")
+            val result = backupManager.backupToDownloads()
+            if (result.isSuccess) {
+                _backupResult.emit("backup_success:${result.getOrNull()}")
+            } else {
+                _backupResult.emit("backup_error:${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun restoreData(uri: Uri) {
+        viewModelScope.launch {
+            _backupResult.emit("restore_started")
+            val result = backupManager.restoreFromUri(uri)
+            if (result.isSuccess) {
+                val count = result.getOrDefault(0)
+                _backupResult.emit("restore_success:$count")
+            } else {
+                _backupResult.emit("restore_error:${result.exceptionOrNull()?.message}")
             }
         }
     }
@@ -227,6 +290,16 @@ class SettingsViewModel @Inject constructor(
     fun downloadModel() {
         viewModelScope.launch {
             localModel.downloadModel()
+        }
+    }
+
+    // ── Delete All ──
+
+    fun deleteAllTransactions() {
+        viewModelScope.launch {
+            _isDeletingAll.value = true
+            transactionRepository.deleteAll()
+            _isDeletingAll.value = false
         }
     }
 }

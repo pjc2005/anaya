@@ -13,7 +13,9 @@ enum class Platform(val packageName: String, val label: String) {
     JD("com.jingdong.app.mall", "京东"),
     MEITUAN("com.sankuai.meituan", "美团"),
     DOUYIN("com.ss.android.ugc.aweme", "抖音"),
-    PDD("com.xunmeng.pinduoduo", "拼多多");
+    PDD("com.xunmeng.pinduoduo", "拼多多"),
+    TAOBAO("com.taobao.taobao", "淘宝"),
+    ELEME("me.ele", "饿了么");
 
     companion object {
         fun fromPackage(pkg: String): Platform? =
@@ -26,7 +28,9 @@ enum class Platform(val packageName: String, val label: String) {
             "京东"     to "支付完成、订单详情页（新版需点开'全部订单信息'）、钱包-账单",
             "美团"     to "支付完成、订单详情页、钱包-账单、外卖订单（需点开'支付方式'）",
             "抖音"     to "支付完成后自动识别",
-            "拼多多"   to "订单详情页（需点开'查看更多订单和优惠信息'）"
+            "拼多多"   to "订单详情页（需点开'查看更多订单和优惠信息'）",
+            "淘宝"     to "支付完成页自动识别",
+            "饿了么"   to "支付完成、订单详情自动识别"
         )
     }
 }
@@ -192,6 +196,22 @@ class PlatformPageRecognizer {
                 "查看更多订单和优惠信息" in clicks -> PageType.ALL_ORDER_INFO
                 "订单详情" in full -> PageType.ORDER_DETAIL
                 isPaymentComplete -> PageType.PAYMENT_COMPLETE
+                else -> PageType.UNKNOWN
+            }
+
+            Platform.TAOBAO -> when {
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
+                "订单详情" in full -> PageType.ORDER_DETAIL
+                "实付款" in full -> PageType.PAYMENT_COMPLETE
+                "已完成" in full && "金额" in full -> PageType.PAYMENT_COMPLETE
+                "账单" in full || "淘宝人生" in full -> PageType.WALLET_BILL
+                else -> PageType.UNKNOWN
+            }
+
+            Platform.ELEME -> when {
+                isPaymentComplete -> PageType.PAYMENT_COMPLETE
+                "订单已提交" in full || "正在为你配送" in full -> PageType.PAYMENT_COMPLETE
+                "订单详情" in full -> PageType.ORDER_DETAIL
                 else -> PageType.UNKNOWN
             }
         }

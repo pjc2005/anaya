@@ -14,6 +14,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,9 @@ import com.anaya.app.di.SetupPrefsManager
 import com.anaya.app.presentation.navigation.NavGraph
 import com.anaya.app.presentation.navigation.Screen
 import com.anaya.app.presentation.theme.AnayaTheme
+import com.anaya.app.presentation.theme.ThemeMode
+import com.anaya.app.presentation.theme.ThemePreferencesManager
+import com.anaya.app.presentation.theme.ThemeState
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -34,12 +38,20 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var setupPrefs: SetupPrefsManager
+    @Inject lateinit var themePrefs: ThemePreferencesManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            AnayaTheme {
+            val themeMode by ThemeState.themeMode.collectAsState()
+
+            // Init theme from preferences
+            LaunchedEffect(Unit) {
+                ThemeState.init(themePrefs)
+            }
+
+            AnayaTheme(themeMode = themeMode) {
                 var isSetupComplete by remember { mutableStateOf<Boolean?>(null) }
 
                 // 异步检查设置状态

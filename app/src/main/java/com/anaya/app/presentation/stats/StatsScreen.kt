@@ -32,12 +32,35 @@ fun StatsScreen(
             TopAppBar(
                 title = { Text("统计") },
                 actions = {
-                    Text(
-                        "${state.selectedMonth.year}年${state.selectedMonth.monthValue}月",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    TextButton(onClick = { viewModel.previousMonth() }) { Text("<") }
-                    TextButton(onClick = { viewModel.nextMonth() }) { Text(">") }
+                    when (state.timePeriod) {
+                        TimePeriod.MONTH -> {
+                            Text(
+                                "${state.selectedYearMonth.year}年${state.selectedYearMonth.monthValue}月",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            TextButton(onClick = { viewModel.previousPeriod() }) { Text("<") }
+                            TextButton(onClick = { viewModel.nextPeriod() }) { Text(">") }
+                        }
+                        TimePeriod.QUARTER -> {
+                            Text(
+                                "${state.selectedYear}年 Q${state.selectedQuarter}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            TextButton(onClick = { viewModel.previousPeriod() }) { Text("<") }
+                            TextButton(onClick = { viewModel.nextPeriod() }) { Text(">") }
+                        }
+                        TimePeriod.YEAR -> {
+                            Text(
+                                "${state.selectedYear}年",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            TextButton(onClick = { viewModel.previousPeriod() }) { Text("<") }
+                            TextButton(onClick = { viewModel.nextPeriod() }) { Text(">") }
+                        }
+                        TimePeriod.ALL -> {
+                            Text("总计", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
                 }
             )
         }
@@ -55,6 +78,31 @@ fun StatsScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Period selector
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    TimePeriod.entries.forEach { period ->
+                        SegmentedButton(
+                            selected = state.timePeriod == period,
+                            onClick = { viewModel.setTimePeriod(period) },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = TimePeriod.entries.indexOf(period),
+                                count = TimePeriod.entries.size
+                            )
+                        ) {
+                            Text(
+                                when (period) {
+                                    TimePeriod.MONTH -> "按月"
+                                    TimePeriod.QUARTER -> "按季度"
+                                    TimePeriod.YEAR -> "按年"
+                                    TimePeriod.ALL -> "总计"
+                                },
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+
+                // Summary cards
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -69,6 +117,7 @@ fun StatsScreen(
                     )
                 }
 
+                // Category breakdown
                 if (state.categoryStats.isNotEmpty()) {
                     Text("支出分布", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -113,17 +162,38 @@ fun StatsScreen(
                 } else {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Text("本月无支出记录", color = colors.onSurfaceVariant)
+                            Text("该时段无支出记录", color = colors.onSurfaceVariant)
                         }
                     }
                 }
 
-                if (state.dailyStats.any { it.expense > 0 || it.income > 0 }) {
-                    Text("每日趋势", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                // Trend chart
+                val hasData = state.dailyStats.any { it.expense > 0 || it.income > 0 }
+                if (hasData) {
+                    Text(
+                        when (state.timePeriod) {
+                            TimePeriod.MONTH -> "每日趋势"
+                            TimePeriod.QUARTER -> "月度趋势"
+                            TimePeriod.YEAR -> "月度趋势"
+                            TimePeriod.ALL -> "月度趋势"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        LineChart(
-                            dailyStats = state.dailyStats,
+                        val xLabels = state.dailyStats.map { stat ->
+                            when (state.timePeriod) {
+                                TimePeriod.MONTH -> "${stat.dayOfMonth}日"
+                                TimePeriod.QUARTER -> "${stat.dayOfMonth}月" // months displayed here
+                                TimePeriod.YEAR -> "${stat.dayOfMonth}月"
+                                TimePeriod.ALL -> "${stat.dayOfMonth}月"
+                            }
+                        }
+                        BarChart(
+                            stats = state.dailyStats,
                             errorColor = colors.error,
+                            primaryColor = colors.primary,
+                            labels = xLabels,
                             modifier = Modifier.fillMaxWidth().height(200.dp).padding(16.dp)
                         )
                     }
@@ -168,39 +238,53 @@ private fun PieChart(stats: List<CategoryStat>, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun LineChart(
-    dailyStats: List<DailyStat>,
+private fun BarChart(
+    stats: List<DailyStat>,
     errorColor: Color,
+    primaryColor: Color,
+    labels: List<String>,
     modifier: Modifier = Modifier
 ) {
-    val maxValue = maxOf(dailyStats.maxOfOrNull { it.expense }?.toFloat() ?: 1f, 1f)
+    val maxValue = maxOf(
+        stats.maxOfOrNull { it.expense }?.toFloat() ?: 1f,
+        stats.maxOfOrNull { it.income }?.toFloat() ?: 1f,
+        1f
+    )
 
     Canvas(modifier = modifier) {
         val width = size.width
         val height = size.height
-        val padding = 40f
-        val chartWidth = width - padding * 2
-        val chartHeight = height - padding * 2
+        val paddingBottom = 40f
+        val paddingTop = 10f
+        val paddingLeft = 10f
+        val paddingRight = 10f
+        val chartWidth = width - paddingLeft - paddingRight
+        val chartHeight = height - paddingTop - paddingBottom
+        val barCount = stats.size.coerceAtLeast(1)
+        val barWidth = (chartWidth / barCount) * 0.6f
+        val gap = (chartWidth / barCount) * 0.4f
 
-        for (i in 0..4) {
-            val y = padding + chartHeight * (1 - i / 4f)
-            drawLine(Color.LightGray.copy(alpha = 0.3f), Offset(padding, y), Offset(width - padding, y), 1f)
-        }
+        stats.forEachIndexed { index, stat ->
+            val x = paddingLeft + index * (barWidth + gap) + gap / 2
+            val expenseHeight = if (maxValue > 0) (stat.expense / maxValue) * chartHeight else 0f
+            val incomeHeight = if (maxValue > 0) (stat.income / maxValue) * chartHeight else 0f
 
-        if (dailyStats.isEmpty()) return@Canvas
-
-        val path = Path()
-        dailyStats.forEachIndexed { index, stat ->
-            val x = padding + chartWidth * index / (dailyStats.size - 1).coerceAtLeast(1)
-            val y = padding + chartHeight * (1 - stat.expense / maxValue)
-            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(path, errorColor, style = Stroke(width = 2.5f))
-
-        dailyStats.forEachIndexed { index, stat ->
-            val x = padding + chartWidth * index / (dailyStats.size - 1).coerceAtLeast(1)
-            val y = padding + chartHeight * (1 - stat.expense / maxValue)
-            if (stat.expense > 0) drawCircle(errorColor, 3f, Offset(x, y))
+            // Expense bar (negative = going down)
+            if (expenseHeight > 0) {
+                drawRect(
+                    color = errorColor,
+                    topLeft = Offset(x, paddingTop + chartHeight - expenseHeight),
+                    size = Size(barWidth / 2, expenseHeight)
+                )
+            }
+            // Income bar (positive = going up)
+            if (incomeHeight > 0) {
+                drawRect(
+                    color = primaryColor,
+                    topLeft = Offset(x + barWidth / 2, paddingTop + chartHeight - incomeHeight),
+                    size = Size(barWidth / 2, incomeHeight)
+                )
+            }
         }
     }
 }

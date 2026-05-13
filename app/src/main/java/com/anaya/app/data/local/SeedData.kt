@@ -1,11 +1,16 @@
 package com.anaya.app.data.local
 
+import android.util.Log
 import com.anaya.app.data.local.entity.AccountEntity
 import com.anaya.app.data.local.entity.CategoryEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 object SeedData {
+
+    val EXPECTED_EXPENSE_COUNT = 17
+    val EXPECTED_INCOME_COUNT = 6
+    val EXPECTED_ACCOUNT_COUNT = 4
 
     val expenseCategories = listOf(
         CategoryEntity(name = "餐饮/正餐", icon = "🍚", type = "EXPENSE", sortOrder = 1),
@@ -51,10 +56,25 @@ object SeedData {
         if (existingCategories.isEmpty()) {
             expenseCategories.forEach { categoryDao.insert(it) }
             incomeCategories.forEach { categoryDao.insert(it) }
+        } else {
+            // 检查分类是否损坏（全同名 or 数量不对）
+            val uniqueNames = existingCategories.map { it.name }.distinct()
+            val isCorrupted = uniqueNames.size == 1
+                    || existingCategories.size != EXPECTED_EXPENSE_COUNT + EXPECTED_INCOME_COUNT
+            if (isCorrupted) {
+                Log.w("SeedData", "Categories appear corrupted (names=$uniqueNames, count=${existingCategories.size}), force reseeding...")
+                categoryDao.deleteAll()
+                expenseCategories.forEach { categoryDao.insert(it) }
+                incomeCategories.forEach { categoryDao.insert(it) }
+            }
         }
 
         val existingAccounts = accountDao.getAllAccounts().first()
         if (existingAccounts.isEmpty()) {
+            defaultAccounts.forEach { accountDao.insert(it) }
+        } else if (existingAccounts.size != EXPECTED_ACCOUNT_COUNT) {
+            Log.w("SeedData", "Accounts count mismatch (${existingAccounts.size} vs $EXPECTED_ACCOUNT_COUNT), reseeding...")
+            accountDao.deleteAll()
             defaultAccounts.forEach { accountDao.insert(it) }
         }
     }

@@ -1,0 +1,127 @@
+You are implementing auto-accounting improvements in an Android Kotlin app at /home/ayana/anaya.
+
+TECH STACK: Kotlin, Jetpack Compose + Material 3, Hilt DI, Room DB, Navigation Compose
+
+CRITICAL RULES:
+- 4-space indentation
+- DO NOT break existing functionality
+- All text in Chinese
+- Use Hilt @Inject for DI
+- Read existing code before modifying
+- After all changes, run: ./gradlew assembleDebug
+
+=== FILES TO READ FIRST ===
+Read these files before making any changes:
+1. /home/ayana/anaya/app/src/main/java/com/anaya/app/service/PaymentAccessibilityService.kt (current auto-accounting service)
+2. /home/ayana/anaya/app/src/main/java/com/anaya/app/service/PaymentAutoCapture.kt
+3. /home/ayana/anaya/app/src/main/java/com/anaya/app/service/ClipboardMonitor.kt
+4. /home/ayana/anaya/app/src/main/java/com/anaya/app/service/PaymentEventBus.kt
+5. /home/ayana/anaya/app/src/main/java/com/anaya/app/service/PlatformPageRecognizer.kt
+6. /home/ayana/anaya/app/src/main/java/com/anaya/app/ml/RuleBasedParser.kt
+7. /home/ayana/anaya/app/src/main/java/com/anaya/app/presentation/home/HomeScreen.kt
+8. /home/ayana/anaya/app/src/main/java/com/anaya/app/presentation/home/HomeViewModel.kt
+9. /home/ayana/anaya/app/src/main/java/com/anaya/app/domain/model/Transaction.kt
+10. /home/ayana/anaya/app/src/main/java/com/anaya/app/data/local/entity/TransactionEntity.kt
+11. /home/ayana/anaya/app/src/main/java/com/anaya/app/data/local/dao/TransactionDao.kt
+12. /home/ayana/anaya/app/src/main/java/com/anaya/app/data/repository/TransactionRepositoryImpl.kt
+13. /home/ayana/anaya/app/src/main/java/com/anaya/app/domain/repository/TransactionRepository.kt
+14. /home/ayana/anaya/app/src/main/java/com/anaya/app/data/local/AppDatabase.kt
+15. /home/ayana/anaya/app/src/main/java/com/anaya/app/AndroidManifest.xml
+16. /home/ayana/anaya/app/src/main/java/com/anaya/app/di/AppModule.kt
+
+=== IMPLEMENTATION ===
+
+Implement ALL of the following improvements to the auto-accounting system:
+
+## 1. Floating Confirmation Window (悬浮窗确认弹窗)
+
+Create a new file: app/src/main/java/com/anaya/app/service/TransactionConfirmWindow.kt
+
+This is a floating overlay window that shows when a payment is detected. It lets the user confirm/edit before saving.
+
+Requirements:
+- Uses WindowManager with TYPE_APPLICATION_OVERLAY
+- Shows: amount (editable), type (支出/收入 toggle), category grid, note field, account selector, save/cancel buttons
+- Category grid shows existing categories from CategoryRepository, with an "其他" fallback
+- Account selector shows existing accounts from AccountRepository
+- On save: emits the confirmed transaction via a callback, then closes
+- On cancel: just closes
+- Has a 2.5s cooldown between dismiss and next show
+- Dark semi-transparent background with a Card in the center
+- Use Material 3 components
+- Must check Settings.canDrawOverlays() first; if no overlay permission, save directly without window
+
+## 2. Content Fingerprint Dedup (内容指纹去重)
+
+In PaymentAccessibilityService, replace the simple 3-second timer with content fingerprint:
+- Generate a signature from: amount + type + full page text hash
+- Store last signature + last capture time
+- Skip if same signature within 5 minutes
+- Reset fingerprint storage when app is different
+
+## 3. Smarter Amount Parsing (智能金额提取)
+
+Enhance RuleBasedParser or create a new helper:
+- Remove time patterns (12:34, 12:34:56) before matching
+- Handle split nodes ("12" and ".34" in different nodes → "12.34")
+- Detect currency symbols (¥, $, €, £)
+- Filter out year numbers (2020-2035 with no decimal)
+- Filter out quantities (2件, 3个, 5笔)
+- Prefer amounts with decimal points over round numbers
+- Add a minimum amount threshold (> 0.01元)
+
+## 4. Per-App Specialized Handlers (分App定制Handler)
+
+Enhance PaymentAccessibilityService's onAccessibilityEvent to route to dedicated handlers:
+
+For each supported platform, create a handler method that knows the specific patterns:
+
+### 支付宝 (Alipay) handler:
+- Pay success page: look for "支付成功" + amount
+- Bill detail page: look for transaction detail with amount  
+- Transfer bill detail: look for "转账" + amount + recipient
+
+### 微信 (WeChat) handler:
+- Pay success page: "支付成功" + "¥" + amount
+- Red packet page: "红包" + amount + "已存入零钱"
+- Transfer received: "已收款" + amount
+- Transfer pending: "待确认收款" + amount
+- QR code payment: scan text for merchant + amount
+- Bill detail page: transaction detail with amount
+
+### 拼多多 (Pinduoduo) handler:
+- Order detail page: "订单详情" + actual payment amount
+- Payment popup: "多多钱包" + payment info
+
+### 抖音 (Douyin) handler:
+- Payment success: "支付成功" + amount
+
+### 美团 (Meituan) handler:
+- Payment success page
+
+### 京东 (JD) handler:
+- Payment success page
+
+### 云闪付 (UnionPay) handler:
+- Payment success: "支付成功" + "交易完成"
+- Bill detail page
+
+For each handler:
+- Collect all visible text from root node
+- Extract amount (use the smarter parser)
+- If amount found with confidence > 0, show confirmation window
+- If no root available, fall back to event.text
+
+## 5. Keep-Alive Mechanism (保活机制)
+
+Add to PaymentAccessibilityService:
+- After startForeground(), also create a 1px transparent overlay window
+- This prevents Chinese ROMs from killing the service
+- Wrap in try-catch since some ROMs block overlay from services
+
+=== BUILD REQUIREMENTS ===
+
+After ALL changes are complete, run:
+cd /home/ayana/anaya && ./gradlew assembleDebug 2>&1 | tail -30
+
+Fix any compilation errors and repeat until BUILD SUCCESSFUL.

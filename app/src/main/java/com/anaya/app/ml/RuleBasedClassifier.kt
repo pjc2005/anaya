@@ -3,6 +3,35 @@ package com.anaya.app.ml
 object RuleBasedClassifier {
     private data class Rule(val keywords: List<String>, val categoryName: String)
 
+    data class CategorySuggestion(
+        val name: String,
+        val icon: String? = null
+    )
+
+    /**
+     * 分类器输出的通用名 → 数据库中的实际分类名映射
+     */
+    private val CATEGORY_NAME_MAP = mapOf(
+        "餐饮" to "餐饮/正餐",
+        "外卖" to "餐饮/外卖",
+        "交通" to "交通/公交",
+        "打车" to "交通/打车",
+        "购物" to "购物/日用",
+        "居住" to "住房/房租",
+        "娱乐" to "娱乐/电影",
+        "通讯" to "通讯/话费",
+        "医疗" to "医疗/看病",
+        "教育" to "教育/学习",
+        "美容/健身" to "其他支出",
+        "投资/彩票" to "其他支出",
+        "工资" to "工资",
+        "兼职" to "兼职",
+        "理财" to "投资",
+        "红包/转账" to "红包",
+        "红包" to "红包",
+        "退款" to "退款"
+    )
+
     private val EXPENSE_RULES = listOf(
         Rule(listOf("美团", "外卖", "饿了么", "餐厅", "食堂", "吃饭", "午餐", "晚餐", "KFC", "麦当劳", "星巴克", "咖啡", "奶茶", "面包"), "餐饮"),
         Rule(listOf("滴滴", "打车", "出租车", "地铁", "公交", "火车", "高铁", "飞机", "加油", "加油站", "停车"), "交通"),
@@ -30,7 +59,10 @@ object RuleBasedClassifier {
         for (rule in EXPENSE_RULES) {
             val match = rule.keywords.firstOrNull { text.contains(it, ignoreCase = true) }
             if (match != null) {
-                return ClassificationResult(confidence = 0.7f, explanation = match)
+                return ClassificationResult(
+                    confidence = 0.7f,
+                    explanation = match
+                )
             }
         }
         return ClassificationResult(confidence = 0.1f)
@@ -41,8 +73,20 @@ object RuleBasedClassifier {
         if (text.isBlank()) return null
         (EXPENSE_RULES + INCOME_RULES).forEach { rule ->
             val match = rule.keywords.firstOrNull { text.contains(it, ignoreCase = true) }
-            if (match != null) return rule.categoryName
+            if (match != null) {
+                val dbName = CATEGORY_NAME_MAP[rule.categoryName]
+                if (dbName != null) return dbName
+                return rule.categoryName
+            }
         }
         return null
+    }
+
+    /** Suggest category name and a relevant emoji icon. */
+    fun suggestCategory(merchant: String?, note: String?): CategorySuggestion? {
+        val name = suggestCategoryName(merchant, note) ?: return null
+        val text = listOfNotNull(merchant, note).joinToString(" ")
+        val icon = IconSuggestions.suggestIcon(text) ?: IconSuggestions.suggestIconForCategory(name)
+        return CategorySuggestion(name = name, icon = icon)
     }
 }
