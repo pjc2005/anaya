@@ -88,6 +88,11 @@ sealed class Screen(
         label = "检测日志"
     )
 
+    data object ModelTest : Screen(
+        route = "model_test",
+        label = "AI 模型测试"
+    )
+
     companion object {
         val bottomNavItems = listOf(Home, Transactions, Stats, Budget, Settings)
     }

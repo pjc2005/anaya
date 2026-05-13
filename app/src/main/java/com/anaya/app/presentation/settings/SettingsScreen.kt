@@ -39,6 +39,7 @@ fun SettingsScreen(
     onNavigateToExportImport: () -> Unit = {},
     onNavigateToSavings: () -> Unit = {},
     onNavigateToAutoCaptureLog: () -> Unit = {},
+    onNavigateToModelTest: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -128,6 +129,14 @@ fun SettingsScreen(
                 title = "检测日志",
                 subtitle = "查看支付检测的三层降级记录",
                 onClick = onNavigateToAutoCaptureLog
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+
+            SettingsItem(
+                icon = Icons.Default.Visibility,
+                title = "AI 模型测试",
+                subtitle = "与本地 0.5B 对话，验证模型是否正常工作",
+                onClick = onNavigateToModelTest
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
 

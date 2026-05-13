@@ -169,6 +169,62 @@ class LocalModelManager @Inject constructor(
         ensureServerRunning()
     }
 
+    /**
+     * 通用对话 — 向本地 0.5B 发送消息并返回回复（用于验证模型是否生效）
+     * @return 模型回复文本，失败返回 null
+     */
+    suspend fun chat(message: String): String? {
+        ensureServerRunning()
+        if (!httpAvailable) return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val body = JSONObject().apply {
+                    put("model", "local")
+                    put("messages", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "system")
+                            put("content", "你是一个智能记账助手。保持回答简短，用中文。")
+                        })
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", message)
+                        })
+                    })
+                    put("temperature", 0.7)
+                    put("max_tokens", 256)
+                    put("stream", false)
+                }
+
+                val conn = URL(httpApiUrl).openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 15_000
+                conn.readTimeout = 60_000
+                conn.setRequestProperty("Content-Type", "application/json")
+
+                OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+
+                val responseCode = conn.responseCode
+                if (responseCode != 200) {
+                    Log.w(TAG, "Chat HTTP $responseCode")
+                    return@withContext null
+                }
+
+                val responseText = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+                val json = JSONObject(responseText)
+                val content = json.getJSONArray("choices")
+                    .getJSONObject(0)
+                    .getJSONObject("message")
+                    .getString("content")
+                conn.disconnect()
+                content
+            } catch (e: Exception) {
+                Log.w(TAG, "Chat failed", e)
+                null
+            }
+        }
+    }
+
     // ───────────────────────────────────────────────
     //  资产解压
     // ───────────────────────────────────────────────

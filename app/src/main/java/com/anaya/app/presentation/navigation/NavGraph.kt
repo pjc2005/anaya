@@ -18,6 +18,7 @@ import com.anaya.app.presentation.settings.AutoCaptureLogScreen
 import com.anaya.app.presentation.smartcapture.SmartCaptureScreen
 import com.anaya.app.presentation.savings.SavingsScreen
 import com.anaya.app.presentation.setup.SetupScreen
+import com.anaya.app.presentation.modeltest.ModelTestScreen
 import com.anaya.app.presentation.stats.StatsScreen
 import com.anaya.app.presentation.transaction.TransactionListScreen
 import com.anaya.app.presentation.transaction.editor.TransactionEditorScreen
@@ -91,6 +92,9 @@ fun NavGraph(
                 },
                 onNavigateToAutoCaptureLog = {
                     navController.navigate(Screen.AutoCaptureLog.route)
+                },
+                onNavigateToModelTest = {
+                    navController.navigate(Screen.ModelTest.route)
                 }
             )
         }
@@ -142,6 +146,12 @@ fun NavGraph(
 
         composable(Screen.AutoCaptureLog.route) {
             AutoCaptureLogScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.ModelTest.route) {
+            ModelTestScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }
