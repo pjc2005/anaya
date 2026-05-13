@@ -25,3 +25,4 @@ app/src/main/assets/models/
 
 # Temp commit message files
 commit_msg*.txt
+*.gguf

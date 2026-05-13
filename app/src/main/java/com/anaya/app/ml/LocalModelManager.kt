@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,21 +20,33 @@ import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
-enum class ModelBackend { NONE, NATIVE, HTTP }
+enum class LlamaServerStatus {
+    /** 尚未初始化 */
+    Unknown,
+    /** 正在解压资产并启动服务 */
+    Starting,
+    /** 服务运行中 /v1/chat/completions 可正常响应 */
+    Running,
+    /** 启动失败（二进制缺失、模型文件缺失、端口占用等） */
+    Failed,
+    /** 已停止 */
+    Stopped
+}
+
+/**
+ * 旧版 ModelStatus — 兼容 SetupScreen/SettingsScreen UI 层
+ * 新代码请使用 LlamaServerStatus
+ */
 enum class ModelStatus { NotDownloaded, Downloading, Ready, Error }
 
 /**
- * 本地模型管理器 — 支持三种推理后端：
+ * 本地模型管理器 — 纯手机端 0.5B 推理
  *
- * 1. HTTP 后端：连接 llama-server / 任意 OpenAI 兼容 API
- *    - 默认指向本机 Qwen3.5-9B（192.168.0.113:8081）
- *    - 也可指向手机上运行的 0.5B llama-server
- *
- * 2. 原生后端（NATIVE）：通过 JNI 加载 libllama.so（需打包进 APK）
- *    - 用于手机上直接跑 0.5B GGUF 模型
- *    - 目前.so 未打包，nativeAvailable=false
- *
- * 3. 规则回退：HTTP 和后端都不可用时用 RuleBasedParser
+ * 架构：
+ *  - APK assets 中打包了 arm64-v8a 的 llama-server 二进制 和 Qwen2.5-0.5B GGUF
+ *  - 首次使用时解压到 filesDir，启动 llama-server 子进程监听 127.0.0.1:8081
+ *  - 所有推理通过 HTTP 调用本地 server 完成
+ *  - 无需接电脑、无需 JNI、无需网络
  */
 @Singleton
 class LocalModelManager @Inject constructor(
@@ -41,174 +54,244 @@ class LocalModelManager @Inject constructor(
 ) : LocalModelInterface {
 
     companion object {
-        /** HTTP 后端地址，可在设置中修改 */
-        var httpApiUrl: String = "http://192.168.0.113:8081/v1/chat/completions"
-        var httpApiKey: String = "not-needed"
-        /** HTTP 请求超时（秒） */
-        var httpTimeout: Int = 10
+        private const val TAG = "LocalModel"
+        private const val SERVER_PORT = 8081
+        private const val ASSETS_BIN = "llama/llama-server"
+        private const val ASSETS_MODEL = "llama/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+
+        /** 本地 server 的 OpenAI 兼容 API 地址 */
+        val httpApiUrl: String
+            get() = "http://127.0.0.1:$SERVER_PORT/v1/chat/completions"
+
+        /** 模型在 filesDir 中存放的目录 */
+        fun getModelDir(context: Context): String =
+            context.filesDir.resolve("llama").absolutePath
+
+        /** 模型的完整路径 */
+        fun getModelFilePath(context: Context): String =
+            File(getModelDir(context), LocalModelInterface.MODEL_FILENAME).absolutePath
+
+        /** llama-server 二进制在 filesDir 中的路径 */
+        fun getBinPath(context: Context): String =
+            File(getModelDir(context), "llama-server").absolutePath
     }
 
-    private var isLoaded = false
-    private var nativeAvailable = false
-    private var httpAvailable = false
+    private val _serverStatus = MutableStateFlow(LlamaServerStatus.Unknown)
+    val serverStatus: StateFlow<LlamaServerStatus> = _serverStatus.asStateFlow()
 
+    // 向下兼容 — UI 层（SetupScreen/SettingsScreen）使用旧的 ModelStatus
     private val _modelStatus = MutableStateFlow(ModelStatus.NotDownloaded)
     val modelStatus: StateFlow<ModelStatus> = _modelStatus.asStateFlow()
-
-    private val _downloadProgress = MutableStateFlow(0)
+    private val _downloadProgress = MutableStateFlow(100)
     val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
 
-    init {
-        try {
-            System.loadLibrary("llama")
-            nativeAvailable = true
-            Log.i("LocalModel", "Native llama.cpp library loaded")
-        } catch (e: UnsatisfiedLinkError) {
-            Log.i("LocalModel", "Native library not available: ${e.message}")
-        }
+    private var serverProcess: Process? = null
+    private var httpAvailable = false
 
-        // 探测 HTTP 后端是否可用
-        try {
-            val conn = URL(httpApiUrl).openConnection() as HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.requestMethod = "HEAD"
-            conn.connect()
-            httpAvailable = conn.responseCode == 200 || conn.responseCode == 405
-            conn.disconnect()
-        } catch (_: Exception) {
-            httpAvailable = false
-        }
-        Log.i("LocalModel", "HTTP backend at $httpApiUrl available=$httpAvailable")
-    }
+    // ───────────────────────────────────────────────
+    //  公共 API
+    // ───────────────────────────────────────────────
 
-    private external fun nativeLoadModel(modelPath: String): Boolean
-    private external fun nativeUnloadModel()
-    private external fun nativeInference(prompt: String, maxTokens: Int): String
+    override fun isModelLoaded(): Boolean = httpAvailable
 
-    override fun isModelLoaded(): Boolean = isLoaded || httpAvailable
-
-    val activeBackend: ModelBackend
-        get() = when {
-            httpAvailable -> ModelBackend.HTTP
-            nativeAvailable && isLoaded -> ModelBackend.NATIVE
-            else -> ModelBackend.NONE
-        }
-
-    fun getModelDir(): String =
-        context.filesDir.resolve("models").absolutePath
-
-    fun getModelFilePath(): String =
-        File(getModelDir(), LocalModelInterface.MODEL_FILENAME).absolutePath
-
-    fun isModelFilePresent(): Boolean =
-        File(getModelFilePath()).exists()
-
-    fun getModelFileSize(): Long {
-        val f = File(getModelFilePath())
-        return if (f.exists()) f.length() else -1
-    }
-
-    fun checkModelStatus() {
-        _modelStatus.value = if (isModelFilePresent()) ModelStatus.Ready else ModelStatus.NotDownloaded
-    }
-
-    suspend fun downloadModel() = withContext(Dispatchers.IO) {
-        if (isModelFilePresent()) {
-            _modelStatus.value = ModelStatus.Ready
-            return@withContext
-        }
+    /**
+     * 确保本地 llama-server 正在运行。
+     * 首次调用时会从 assets 解压二进制和模型，然后启动 server。
+     */
+    suspend fun ensureServerRunning() {
+        if (httpAvailable) return
+        if (_serverStatus.value == LlamaServerStatus.Starting) return
         _modelStatus.value = ModelStatus.Downloading
-        _downloadProgress.value = 0
-        try {
-            val dir = File(getModelDir())
-            dir.mkdirs()
-            val url = URL("https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 15000
-            conn.connect()
-            val totalBytes = conn.contentLengthLong
-            val input = conn.inputStream
-            val output = File(getModelFilePath()).outputStream()
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
-            var totalRead = 0L
-            while (input.read(buffer).also { bytesRead = it } != -1) {
-                output.write(buffer, 0, bytesRead)
-                totalRead += bytesRead
-                if (totalBytes > 0) {
-                    _downloadProgress.value = ((totalRead * 100) / totalBytes).toInt()
-                }
+        _downloadProgress.value = 50
+        _serverStatus.value = LlamaServerStatus.Starting
+        val ok = withContext(Dispatchers.IO) {
+            try {
+                extractAssets()
+                _downloadProgress.value = 80
+                startServerProcess()
+                waitForServer()
+            } catch (e: Exception) {
+                Log.e(TAG, "Server startup failed", e)
+                false
             }
-            output.close()
-            input.close()
-            conn.disconnect()
+        }
+        if (ok) {
+            httpAvailable = true
+            _serverStatus.value = LlamaServerStatus.Running
             _modelStatus.value = ModelStatus.Ready
-            Log.i("LocalModel", "Model downloaded: ${getModelFilePath()}")
-        } catch (e: Exception) {
-            Log.e("LocalModel", "Download failed", e)
+            _downloadProgress.value = 100
+            Log.i(TAG, "Local llama-server is ready on $httpApiUrl")
+        } else {
+            _serverStatus.value = LlamaServerStatus.Failed
             _modelStatus.value = ModelStatus.Error
         }
     }
 
-    override suspend fun loadModel(modelPath: String): Boolean = withContext(Dispatchers.IO) {
-        if (httpAvailable) {
-            isLoaded = true
-            return@withContext true
-        }
-        val file = File(modelPath)
-        if (!file.exists()) {
-            val fallback = File(context.filesDir, "models/${LocalModelInterface.MODEL_FILENAME}")
-            if (fallback.exists()) {
-                return@withContext doLoad(fallback.absolutePath)
-            }
-            Log.w("LocalModel", "Model not found, using rule-based fallback")
-            isLoaded = true
-            true
-        } else {
-            doLoad(file.absolutePath)
-        }
+    /** 停止本地 server */
+    fun stopServer() {
+        try {
+            serverProcess?.destroy()
+            serverProcess?.waitFor()
+        } catch (_: Exception) {}
+        serverProcess = null
+        httpAvailable = false
+        _serverStatus.value = LlamaServerStatus.Stopped
+        Log.i(TAG, "Local llama-server stopped")
     }
 
-    private fun doLoad(path: String): Boolean {
-        return if (nativeAvailable) {
-            isLoaded = nativeLoadModel(path)
-            isLoaded
-        } else {
-            isLoaded = httpAvailable
-            httpAvailable
-        }
+    override suspend fun loadModel(modelPath: String): Boolean {
+        ensureServerRunning()
+        return httpAvailable
     }
 
     override suspend fun unloadModel() {
-        if (nativeAvailable && isLoaded) {
-            nativeUnloadModel()
-        }
-        isLoaded = false
+        stopServer()
     }
 
-    // ════════════════════════════════════════════════
+    /**
+     * 检查模型状态 — 兼容旧 UI 调用
+     */
+    fun checkModelStatus() {
+        _modelStatus.value = if (httpAvailable) ModelStatus.Ready else ModelStatus.NotDownloaded
+    }
+
+    /**
+     * 下载模型 — 已打包在 APK 中，仅做兼容
+     */
+    suspend fun downloadModel() {
+        ensureServerRunning()
+    }
+
+    // ───────────────────────────────────────────────
+    //  资产解压
+    // ───────────────────────────────────────────────
+
+    private fun extractAssets() {
+        val dir = File(getModelDir(context))
+        dir.mkdirs()
+
+        // 解压 llama-server 二进制
+        val binFile = File(getBinPath(context))
+        if (!binFile.exists() || binFile.length() == 0L) {
+            Log.i(TAG, "Extracting llama-server binary...")
+            context.assets.open(ASSETS_BIN).use { input ->
+                binFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            binFile.setExecutable(true)
+            Log.i(TAG, "Binary extracted: ${binFile.length()} bytes")
+        }
+
+        // 解压 GGUF 模型
+        val modelFile = File(getModelFilePath(context))
+        if (!modelFile.exists() || modelFile.length() == 0L) {
+            Log.i(TAG, "Extracting model file...")
+            context.assets.open(ASSETS_MODEL).use { input ->
+                modelFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.i(TAG, "Model extracted: ${modelFile.length()} bytes")
+        }
+    }
+
+    // ───────────────────────────────────────────────
+    //  子进程管理
+    // ───────────────────────────────────────────────
+
+    private fun startServerProcess(): Boolean {
+        val bin = getBinPath(context)
+        val model = getModelFilePath(context)
+
+        if (!File(bin).exists()) {
+            Log.e(TAG, "llama-server binary not found at $bin")
+            return false
+        }
+        if (!File(model).exists()) {
+            Log.e(TAG, "Model file not found at $model")
+            return false
+        }
+
+        try {
+            val pb = ProcessBuilder(
+                bin,
+                "-m", model,
+                "--host", "127.0.0.1",
+                "--port", SERVER_PORT.toString(),
+                "--ctx-size", "1024",
+                "--n-gpu-layers", "99",              // 纯 GPU 跑
+                "--temp", "0.1",
+                "--repeat-penalty", "1.0",
+                "-ngl", "99",
+                "--mlock"                             // 锁定内存防交换
+            )
+            pb.directory(File(getModelDir(context)))
+            pb.redirectErrorStream(true)
+
+            serverProcess = pb.start()
+            Log.i(TAG, "llama-server started")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start llama-server", e)
+            return false
+        }
+    }
+
+    /** 轮询 /health 等待 server 就绪 */
+    private suspend fun waitForServer(): Boolean {
+        val healthUrl = "http://127.0.0.1:$SERVER_PORT/health"
+        val startMs = System.currentTimeMillis()
+        val timeoutMs = 30_000L // 30 秒超时
+
+        while (System.currentTimeMillis() - startMs < timeoutMs) {
+            try {
+                val conn = URL(healthUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.requestMethod = "GET"
+                val code = conn.responseCode
+                conn.disconnect()
+                if (code == 200) {
+                    Log.i(TAG, "Server ready after ${System.currentTimeMillis() - startMs}ms")
+                    return true
+                }
+            } catch (_: Exception) {
+                // server 还没就绪，继续等
+            }
+            delay(500)
+        }
+
+        // 如果 health 不可用，尝试 /v1/models
+        try {
+            val conn = URL("http://127.0.0.1:$SERVER_PORT/v1/models").openConnection() as HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            val code = conn.responseCode
+            conn.disconnect()
+            if (code == 200) {
+                Log.i(TAG, "Server ready (v1/models) after ${System.currentTimeMillis() - startMs}ms")
+                return true
+            }
+        } catch (_: Exception) {}
+
+        Log.w(TAG, "Server did not become ready within ${timeoutMs / 1000}s")
+        return false
+    }
+
+    // ───────────────────────────────────────────────
     //  LLM 推理入口
-    // ════════════════════════════════════════════════
+    // ───────────────────────────────────────────────
 
     override suspend fun parsePaymentText(rawText: String): ParsedTransaction {
         return withContext(Dispatchers.Default) {
-            // 1) HTTP 后端（优先，可用性最高）
-            val httpResult = inferHttp("parse", rawText)
+            ensureServerRunning()
+            val httpResult = inferLocal("parse", rawText)
             if (httpResult != null) {
-                Log.i("LocalModel", "HTTP parse OK: amount=${httpResult.amount} confidence=${httpResult.confidence}")
+                Log.i(TAG, "Local LLM parse OK: amount=${httpResult.amount} confidence=${httpResult.confidence}")
                 return@withContext httpResult
             }
-            // 2) 原生 JNI 后端
-            if (nativeAvailable && isLoaded) {
-                try {
-                    val result = nativeInference(buildPrompt("parse", rawText), 128)
-                    val parsed = LLMResponseParser.parseTransactionJson(result)
-                    if (parsed != null) return@withContext parsed
-                } catch (e: Exception) {
-                    Log.w("LocalModel", "Native parse failed", e)
-                }
-            }
-            // 3) 规则回退
+            // 规则回退
             RuleBasedParser.parsePaymentText(rawText)
         }
     }
@@ -220,6 +303,7 @@ class LocalModelManager @Inject constructor(
         existingCategories: List<String>
     ): ClassificationResult {
         return withContext(Dispatchers.Default) {
+            ensureServerRunning()
             val input = buildString {
                 append("Merchant: $merchant\n")
                 append("Note: $note\n")
@@ -227,50 +311,29 @@ class LocalModelManager @Inject constructor(
                 append("Available: ${existingCategories.joinToString(", ")}")
             }
 
-            // 1) HTTP 后端
-            val httpResult = inferHttp("classify", input)
+            val httpResult = inferLocal("classify", input)
             if (httpResult != null) return@withContext ClassificationResult(
                 categoryId = null,
                 confidence = httpResult.confidence,
                 explanation = httpResult.categoryName
             )
 
-            // 2) 原生 JNI
-            if (nativeAvailable && isLoaded) {
-                try {
-                    val result = nativeInference(buildPrompt("classify", input), 64)
-                    val classified = LLMResponseParser.parseClassificationJson(result)
-                    if (classified != null) return@withContext classified
-                } catch (_: Exception) {}
-            }
-
-            // 3) 规则回退
             RuleBasedClassifier.classify(merchant, note)
         }
     }
 
     override suspend fun extractTransactions(rawText: String): List<ParsedTransaction> {
         return withContext(Dispatchers.Default) {
+            ensureServerRunning()
             val truncated = if (rawText.length > 6000) {
                 rawText.take(6000) + "\n...(文件较长，已截取前6000字符)"
             } else rawText
 
-            // 1) HTTP
-            val httpResult = inferHttp("extract", truncated)
+            val httpResult = inferLocal("extract", truncated)
             if (httpResult != null && httpResult.amount != null) {
                 return@withContext listOf(httpResult)
             }
 
-            // 2) JNI
-            if (nativeAvailable && isLoaded) {
-                try {
-                    val result = nativeInference(buildPrompt("extract", truncated), 1024)
-                    val list = LLMResponseParser.parseTransactionList(result)
-                    if (list != null) return@withContext list
-                } catch (_: Exception) {}
-            }
-
-            // 3) 规则回退
             fallbackParseTransactions(rawText)
         }
     }
@@ -280,7 +343,6 @@ class LocalModelManager @Inject constructor(
         totalMonthlyExpense: Long,
         totalMonthlyIncome: Long
     ): List<SavingTip> {
-        // 使用现有的硬编码储蓄建议逻辑
         return withContext(Dispatchers.Default) {
             if (totalMonthlyExpense <= 0) return@withContext emptyList()
             val tips = mutableListOf<SavingTip>()
@@ -307,15 +369,15 @@ class LocalModelManager @Inject constructor(
         }
     }
 
-    // ════════════════════════════════════════════════
-    //  HTTP 推理
-    // ════════════════════════════════════════════════
+    // ───────────────────────────────────────────────
+    //  本地 HTTP 推理
+    // ───────────────────────────────────────────────
 
     /**
-     * 通过 HTTP API 调用本地模型（llama-server / ollama / 任意 OpenAI 兼容接口）
+     * 通过本地 llama-server HTTP API 调用模型
      * @return 解析成功的 ParsedTransaction，失败返回 null
      */
-    private suspend fun inferHttp(task: String, input: String): ParsedTransaction? {
+    private suspend fun inferLocal(task: String, input: String): ParsedTransaction? {
         if (!httpAvailable) return null
         return withContext(Dispatchers.IO) {
             try {
@@ -344,16 +406,15 @@ class LocalModelManager @Inject constructor(
                 val conn = URL(httpApiUrl).openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.doOutput = true
-                conn.connectTimeout = httpTimeout * 1000
-                conn.readTimeout = httpTimeout * 1000
+                conn.connectTimeout = 15_000
+                conn.readTimeout = 30_000
                 conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("Authorization", "Bearer $httpApiKey")
 
                 OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
 
                 val responseCode = conn.responseCode
                 if (responseCode != 200) {
-                    Log.w("LocalModel", "HTTP $responseCode for task=$task")
+                    Log.w(TAG, "Local server HTTP $responseCode for task=$task")
                     return@withContext null
                 }
 
@@ -384,8 +445,9 @@ class LocalModelManager @Inject constructor(
                     else -> null
                 }
             } catch (e: Exception) {
-                Log.w("LocalModel", "HTTP infer failed for task=$task", e)
+                Log.w(TAG, "Local infer failed for task=$task", e)
                 httpAvailable = false
+                _serverStatus.value = LlamaServerStatus.Failed
                 null
             }
         }
@@ -398,9 +460,9 @@ class LocalModelManager @Inject constructor(
         else -> ""
     }
 
-    // ════════════════════════════════════════════════
+    // ───────────────────────────────────────────────
     //  辅助
-    // ════════════════════════════════════════════════
+    // ───────────────────────────────────────────────
 
     private fun fallbackParseTransactions(rawText: String): List<ParsedTransaction> {
         val results = mutableListOf<ParsedTransaction>()
@@ -413,15 +475,5 @@ class LocalModelManager @Inject constructor(
             }
         }
         return results
-    }
-
-    private fun buildPrompt(task: String, input: String): String {
-        val sysMsg = when (task) {
-            "parse" -> "你是一个支付信息提取助手。从用户提供的文本中提取金额、商户、备注信息，返回JSON格式。"
-            "classify" -> "你是一个消费分类助手。根据商户名称和备注将交易分类到合适的类别，返回JSON。"
-            "extract" -> "你是一个记账数据导入助手。你收到的文本是其他记账App导出的交易记录（可能是CSV、TSV或纯文本格式）。请分析并提取所有交易记录，按以下JSON数组格式输出..."
-            else -> ""
-        }
-        return "<|im_start|>system\n$sysMsg\n<|im_end|>\\n<|im_start|>user\n$input\n<|im_end|>\\n<|im_start|>assistant\n"
     }
 }
