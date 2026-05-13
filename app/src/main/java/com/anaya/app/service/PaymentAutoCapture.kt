@@ -4,13 +4,18 @@ import android.util.Log
 import com.anaya.app.domain.repository.TransactionRepository
 import com.anaya.app.domain.model.Transaction
 import com.anaya.app.domain.model.TransactionType
+import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
 import com.anaya.app.ml.RuleBasedClassifier
+import com.anaya.app.ml.RuleBasedParser
+import com.anaya.app.service.ClipboardMonitor
+import com.anaya.app.util.CaptureLogManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,7 +25,8 @@ class PaymentAutoCapture @Inject constructor(
     private val localModel: LocalModelInterface,
     private val clipboardMonitor: ClipboardMonitor,
     private val eventBus: PaymentEventBus,
-    private val transactionRepository: TransactionRepository
+    private val transactionRepository: TransactionRepository,
+    private val categoryRepository: CategoryRepository
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -49,15 +55,28 @@ class PaymentAutoCapture @Inject constructor(
         scope.launch {
             try {
                 val now = System.currentTimeMillis()
+                // 使用 RuleBasedClassifier 自动分类
+                val catName = RuleBasedClassifier.suggestCategoryName(parsed.merchant, parsed.note)
+                val categoryId = if (catName != null) {
+                    val cats = categoryRepository.getAllCategories().first()
+                    cats.find { it.name == catName }?.id ?: 0L
+                } else 0L
+
                 transactionRepository.insert(
                     Transaction(
                         amount = amount,
                         type = TransactionType.EXPENSE,
-                        categoryId = 0,
+                        categoryId = categoryId,
                         accountId = 1,
                         note = parsed.note ?: parsed.merchant,
                         date = now
                     )
+                )
+                CaptureLogManager.log(
+                    platform = source, amount = amount,
+                    merchant = parsed.merchant, layer = 0, source = source.lowercase(),
+                    confidence = parsed.confidence,
+                    note = "AutoCapture: ${parsed.note ?: ""}"
                 )
                 Log.d("AutoCapture", "Saved: ${parsed.merchant} ¥${amount / 100.0}")
             } catch (e: Exception) {

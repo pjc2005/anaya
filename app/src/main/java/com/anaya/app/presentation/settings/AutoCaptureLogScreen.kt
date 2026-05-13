@@ -21,12 +21,17 @@ import com.anaya.app.util.CaptureLogManager
 import com.anaya.app.util.CurrencyUtils
 import java.text.SimpleDateFormat
 import java.util.*
+import com.anaya.app.ml.RuleBasedParser
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AutoCaptureLogScreen(
     onNavigateBack: () -> Unit = {}
 ) {
+    // 测试输入
+    var testInput by remember { mutableStateOf("") }
+    var testResult by remember { mutableStateOf<String?>(null) }
+
     // 每秒刷新
     var refreshTick by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) {
@@ -91,8 +96,34 @@ fun AutoCaptureLogScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // 测试检测按钮
+                item {
+                    TestDetectionCard(
+                        testInput = testInput,
+                        onTestInputChange = { testInput = it },
+                        testResult = testResult,
+                        onTest = {
+                            if (testInput.isNotBlank()) {
+                                val parsed = RuleBasedParser.parsePaymentText(testInput)
+                                val catName = com.anaya.app.ml.RuleBasedClassifier.suggestCategoryName(parsed.merchant, parsed.note)
+                                testResult = buildString {
+                                    appendLine("📋 解析结果：")
+                                    appendLine("金额: ${parsed.amount?.let { CurrencyUtils.centsToDisplayString(it) } ?: "未识别"}")
+                                    appendLine("商户: ${parsed.merchant ?: "未识别"}")
+                                    appendLine("备注: ${parsed.note?.take(60) ?: "无"}")
+                                    appendLine("置信度: ${(parsed.confidence * 100).toInt()}%")
+                                    appendLine("推荐分类: ${catName ?: "未识别"}")
+                                    if (parsed.amount == null) {
+                                        appendLine("\n⚠️ 未识别到金额，请检查输入文本是否包含支付信息")
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+
                 // 统计头部
                 item {
                     Row(
@@ -241,6 +272,77 @@ private fun LogEntryCard(
                     color = statusColor,
                     fontWeight = FontWeight.Medium
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TestDetectionCard(
+    testInput: String,
+    onTestInputChange: (String) -> Unit,
+    testResult: String?,
+    onTest: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Science, contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.tertiary)
+                Spacer(Modifier.width(6.dp))
+                Text("检测测试",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("粘贴一段支付页面文本，查看解析结果",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = testInput,
+                onValueChange = onTestInputChange,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp),
+                placeholder = { Text("例如：微信支付 您已成功付款 ¥29.00 向兰州拉面") },
+                textStyle = MaterialTheme.typography.bodySmall,
+                maxLines = 3,
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onTest,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = testInput.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiary
+                )
+            ) {
+                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("测试解析")
+            }
+
+            testResult?.let { result ->
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Text(
+                        result,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
