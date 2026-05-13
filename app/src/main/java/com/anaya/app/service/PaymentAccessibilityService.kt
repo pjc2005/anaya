@@ -22,7 +22,6 @@ import com.anaya.app.domain.repository.AccountRepository
 import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.domain.repository.TransactionRepository
 import com.anaya.app.ml.LocalModelInterface
-import com.anaya.app.ml.RuleBasedClassifier
 import com.anaya.app.ml.RuleBasedParser
 import com.anaya.app.util.CaptureLogManager
 import android.content.ClipboardManager
@@ -202,20 +201,37 @@ class PaymentAccessibilityService : AccessibilityService() {
             Log.w(TAG, "${platform.label}: layer1 rootInActiveWindow is null")
         }
 
-        // Layer 2: 事件文本降级
+        // Layer 2: 事件文本降级 — LLM 解析 + 规则回退
         val eventText = "$pendingEventText $pendingEventDesc".trim()
         if (eventText.isNotBlank()) {
-            val parsed = RuleBasedParser.parsePaymentText(eventText)
-            if (parsed.amount != null && parsed.amount > 0 && parsed.confidence >= 0.5f) {
-                Log.i(TAG, "${platform.label}: layer2 fallback parsed amount=${parsed.amount / 100.0}")
-                CaptureLogManager.log(
-                    platform = platform.label, amount = parsed.amount,
-                    merchant = parsed.merchant, layer = 2, source = "accessibility",
-                    confidence = parsed.confidence
-                )
-                scope.launch { autoSaveFallback(platform, parsed.amount, parsed.merchant) }
-                return
+            scope.launch {
+                // LLM 优先
+                val parsed = localModel.parsePaymentText(eventText)
+                if (parsed.amount != null && parsed.amount > 0 && parsed.confidence >= 0.5f) {
+                    Log.i(TAG, "${platform.label}: layer2 LLM parsed amount=${parsed.amount / 100.0}")
+                    CaptureLogManager.log(
+                        platform = platform.label, amount = parsed.amount,
+                        merchant = parsed.merchant, layer = 2, source = "llm-parse",
+                        confidence = parsed.confidence
+                    )
+                    autoSaveFallback(platform, parsed.amount, parsed.merchant)
+                    return@launch
+                }
+                // LLM 失败 → 规则回退
+                val ruleParsed = withContext(Dispatchers.Default) {
+                    RuleBasedParser.parsePaymentText(eventText)
+                }
+                if (ruleParsed.amount != null && ruleParsed.amount > 0 && ruleParsed.confidence >= 0.5f) {
+                    Log.i(TAG, "${platform.label}: layer2 fallback parsed amount=${ruleParsed.amount / 100.0}")
+                    CaptureLogManager.log(
+                        platform = platform.label, amount = ruleParsed.amount,
+                        merchant = ruleParsed.merchant, layer = 2, source = "accessibility",
+                        confidence = ruleParsed.confidence
+                    )
+                    autoSaveFallback(platform, ruleParsed.amount, ruleParsed.merchant)
+                }
             }
+            // 继续 Layer 3 — 与 LLM 并行执行，由指纹去重兜底
         }
 
         // Layer 3: 截图 → OCR 兜底（适用于国产ROM上节点树和事件文本都拿不到金额的情况）
@@ -246,10 +262,16 @@ class PaymentAccessibilityService : AccessibilityService() {
     private suspend fun autoSaveFallback(platform: Platform, amount: Long, merchant: String?) {
         if (isDuplicate(platform.packageName, amount, "EXPENSE", merchant ?: "")) return
 
-        val catName = RuleBasedClassifier.suggestCategoryName(merchant, null)
         val cats = categoryRepository.getAllCategories().first()
-        val categoryId = if (catName != null) {
-            cats.find { it.name == catName }?.id ?: 0
+        val catNames = cats.map { it.name }
+        val classification = localModel.classifyTransaction(
+            merchant = merchant,
+            note = null,
+            amount = amount,
+            existingCategories = catNames
+        )
+        val categoryId = if (classification.confidence >= 0.4f && classification.explanation != null) {
+            cats.find { it.name == classification.explanation }?.id ?: 0
         } else 0
 
         transactionRepository.insert(
@@ -358,10 +380,16 @@ class PaymentAccessibilityService : AccessibilityService() {
     ) {
         try {
             val finalCategoryId = if (categoryId != 0L) categoryId else {
-                val catName = RuleBasedClassifier.suggestCategoryName(merchant, null)
-                if (catName != null) {
-                    val cats = categoryRepository.getAllCategories().first()
-                    cats.find { it.name == catName }?.id ?: 0
+                val cats = categoryRepository.getAllCategories().first()
+                val catNames = cats.map { it.name }
+                val classification = localModel.classifyTransaction(
+                    merchant = merchant,
+                    note = null,
+                    amount = amount,
+                    existingCategories = catNames
+                )
+                if (classification.confidence >= 0.4f && classification.explanation != null) {
+                    cats.find { it.name == classification.explanation }?.id ?: 0
                 } else 0
             }
 
@@ -492,23 +520,29 @@ class PaymentAccessibilityService : AccessibilityService() {
 
             Log.d(TAG, "Clipboard changed: ${text.take(100)}")
 
-            // 解析剪贴板中的支付信息
-            val parsed = RuleBasedParser.parsePaymentText(text)
-            if (parsed.amount != null && parsed.amount > 0) {
-                Log.i(TAG, "Clipboard payment detected: ${parsed.amount / 100.0}元")
-                CaptureLogManager.log(
-                    platform = "剪贴板", amount = parsed.amount,
-                    merchant = parsed.merchant, layer = 0, source = "clipboard",
-                    confidence = parsed.confidence
-                )
+            // 解析剪贴板中的支付信息 — LLM 全程参与
+            scope.launch {
+                try {
+                    val parsed = localModel.parsePaymentText(text)
+                    if (parsed.amount != null && parsed.amount > 0) {
+                        Log.i(TAG, "Clipboard LLM parsed: ${parsed.amount / 100.0}元 conf=${parsed.confidence}")
+                        CaptureLogManager.log(
+                            platform = "剪贴板", amount = parsed.amount,
+                            merchant = parsed.merchant, layer = 0, source = "clipboard-llm",
+                            confidence = parsed.confidence
+                        )
 
-                // 直接自动记账
-                scope.launch {
-                    try {
-                        val catName = RuleBasedClassifier.suggestCategoryName(parsed.merchant, parsed.note)
+                        // LLM 自动分类
                         val cats = categoryRepository.getAllCategories().first()
-                        val categoryId = if (catName != null) {
-                            cats.find { it.name == catName }?.id ?: 0
+                        val catNames = cats.map { it.name }
+                        val classification = localModel.classifyTransaction(
+                            merchant = parsed.merchant,
+                            note = parsed.note,
+                            amount = parsed.amount,
+                            existingCategories = catNames
+                        )
+                        val categoryId = if (classification.confidence >= 0.4f && classification.explanation != null) {
+                            cats.find { it.name == classification.explanation }?.id ?: 0
                         } else 0
 
                         transactionRepository.insert(
@@ -525,9 +559,9 @@ class PaymentAccessibilityService : AccessibilityService() {
                             "已自动记账 [剪贴板]",
                             "${parsed.merchant ?: ""} ${"%.2f元".format(parsed.amount / 100.0)}"
                         )
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Clipboard save failed", e)
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Clipboard LLM processing failed", e)
                 }
             }
         } catch (e: Exception) {

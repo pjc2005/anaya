@@ -34,10 +34,22 @@ class ClipboardMonitor @Inject constructor(
                 val text = clip.getItemAt(0).text?.toString()
                 if (text != null && text != lastText) {
                     lastText = text
-                    Log.d("Clipboard", "Detected: $text")
-                    // Use blocking parse since we're on the clipboard listener thread
-                    val parsed = RuleBasedParser.parsePaymentText(text)
-                    trySend(parsed)
+                    Log.d("Clipboard", "Detected: ${text.take(100)}")
+                    // 异步 LLM 解析 + 规则回退
+                    scope.launch {
+                        val parsed = localModel.parsePaymentText(text)
+                        if (parsed.amount != null && parsed.confidence >= 0.4f) {
+                            Log.i("Clipboard", "LLM parsed: ${parsed.amount / 100.0}元 -> ${parsed.merchant}")
+                            trySend(parsed)
+                        } else {
+                            // LLM 失败 → 规则回退
+                            val ruleParsed = RuleBasedParser.parsePaymentText(text)
+                            if (ruleParsed.amount != null && ruleParsed.confidence >= 0.3f) {
+                                Log.i("Clipboard", "Rule fallback: ${ruleParsed.amount / 100.0}元 -> ${ruleParsed.merchant}")
+                                trySend(ruleParsed)
+                            }
+                        }
+                    }
                 }
             }
         }

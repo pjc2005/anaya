@@ -7,7 +7,6 @@ import com.anaya.app.domain.model.TransactionType
 import com.anaya.app.domain.repository.CategoryRepository
 import com.anaya.app.ml.LocalModelInterface
 import com.anaya.app.ml.ParsedTransaction
-import com.anaya.app.ml.RuleBasedClassifier
 import com.anaya.app.ml.RuleBasedParser
 import com.anaya.app.service.ClipboardMonitor
 import com.anaya.app.util.CaptureLogManager
@@ -55,11 +54,16 @@ class PaymentAutoCapture @Inject constructor(
         scope.launch {
             try {
                 val now = System.currentTimeMillis()
-                // 使用 RuleBasedClassifier 自动分类
-                val catName = RuleBasedClassifier.suggestCategoryName(parsed.merchant, parsed.note)
-                val categoryId = if (catName != null) {
-                    val cats = categoryRepository.getAllCategories().first()
-                    cats.find { it.name == catName }?.id ?: 0L
+                val cats = categoryRepository.getAllCategories().first()
+                val catNames = cats.map { it.name }
+                val classification = localModel.classifyTransaction(
+                    merchant = parsed.merchant,
+                    note = parsed.note,
+                    amount = parsed.amount,
+                    existingCategories = catNames
+                )
+                val categoryId = if (classification.confidence >= 0.4f && classification.explanation != null) {
+                    cats.find { it.name == classification.explanation }?.id ?: 0L
                 } else 0L
 
                 transactionRepository.insert(
