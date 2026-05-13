@@ -17,20 +17,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.anaya.app.service.AccessibilityDebugState
 import com.anaya.app.util.CaptureLogManager
 import com.anaya.app.util.CurrencyUtils
 import java.text.SimpleDateFormat
 import java.util.*
-import com.anaya.app.ml.RuleBasedParser
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AutoCaptureLogScreen(
-    onNavigateBack: () -> Unit = {}
+    onNavigateBack: () -> Unit = {},
+    viewModel: AutoCaptureLogViewModel = hiltViewModel()
 ) {
-    // 测试输入
-    var testInput by remember { mutableStateOf("") }
-    var testResult by remember { mutableStateOf<String?>(null) }
+    val state by viewModel.state.collectAsStateWithLifecycle()
 
     // 每秒刷新
     var refreshTick by remember { mutableStateOf(0L) }
@@ -40,6 +41,9 @@ fun AutoCaptureLogScreen(
             refreshTick = System.currentTimeMillis()
         }
     }
+
+    // 首次加载刷新调试信息
+    LaunchedEffect(Unit) { viewModel.refreshDebugInfo() }
 
     val logs = remember(refreshTick) { CaptureLogManager.recentLogs }
     val dateFormat = remember { SimpleDateFormat("MM/dd HH:mm:ss", Locale.CHINA) }
@@ -100,27 +104,29 @@ fun AutoCaptureLogScreen(
             ) {
                 // 测试检测按钮
                 item {
-                    TestDetectionCard(
-                        testInput = testInput,
-                        onTestInputChange = { testInput = it },
-                        testResult = testResult,
-                        onTest = {
-                            if (testInput.isNotBlank()) {
-                                val parsed = RuleBasedParser.parsePaymentText(testInput)
-                                val catName = com.anaya.app.ml.RuleBasedClassifier.suggestCategoryName(parsed.merchant, parsed.note)
-                                testResult = buildString {
-                                    appendLine("📋 解析结果：")
-                                    appendLine("金额: ${parsed.amount?.let { CurrencyUtils.centsToDisplayString(it) } ?: "未识别"}")
-                                    appendLine("商户: ${parsed.merchant ?: "未识别"}")
-                                    appendLine("备注: ${parsed.note?.take(60) ?: "无"}")
-                                    appendLine("置信度: ${(parsed.confidence * 100).toInt()}%")
-                                    appendLine("推荐分类: ${catName ?: "未识别"}")
-                                    if (parsed.amount == null) {
-                                        appendLine("\n⚠️ 未识别到金额，请检查输入文本是否包含支付信息")
-                                    }
-                                }
-                            }
-                        }
+                    EnhancedTestCard(
+                        testInput = state.testInput,
+                        onTestInputChange = viewModel::onTestInputChanged,
+                        llmResult = state.llmResult,
+                        ruleResult = state.ruleResult,
+                        isParsingLlm = state.isParsingLlm,
+                        isParsingRule = state.isParsingRule,
+                        onParseLlm = viewModel::parseWithLlm,
+                        onParseRule = viewModel::parseWithRule
+                    )
+                }
+
+                // 诊断信息面板
+                item {
+                    DiagnosticPanel(
+                        debugInfo = state.debugInfo,
+                        debugTimestamp = state.debugTimestamp,
+                        onRefresh = viewModel::refreshDebugInfo,
+                        onExport = viewModel::exportDiagnosticData,
+                        onCopyRootText = viewModel::copyRootTextToTest,
+                        onCopyEventText = viewModel::copyEventTextToTest,
+                        hasRootText = AccessibilityDebugState.lastRootNodeText.isNotBlank(),
+                        hasEventText = AccessibilityDebugState.lastEventText.isNotBlank()
                     )
                 }
 
@@ -278,11 +284,15 @@ private fun LogEntryCard(
 }
 
 @Composable
-private fun TestDetectionCard(
+private fun EnhancedTestCard(
     testInput: String,
     onTestInputChange: (String) -> Unit,
-    testResult: String?,
-    onTest: () -> Unit
+    llmResult: TestParseResult?,
+    ruleResult: TestParseResult?,
+    isParsingLlm: Boolean,
+    isParsingRule: Boolean,
+    onParseLlm: () -> Unit,
+    onParseRule: () -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(
@@ -300,8 +310,8 @@ private fun TestDetectionCard(
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium)
             }
-            Spacer(Modifier.height(8.dp))
-            Text("粘贴一段支付页面文本，查看解析结果",
+            Spacer(Modifier.height(4.dp))
+            Text("粘贴文本 → 分别点击「LLM 解析」和「规则解析」对比结果",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
 
@@ -317,31 +327,184 @@ private fun TestDetectionCard(
             )
 
             Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = onTest,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = testInput.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiary
-                )
-            ) {
-                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("测试解析")
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onParseLlm,
+                    modifier = Modifier.weight(1f),
+                    enabled = testInput.isNotBlank() && !isParsingLlm,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    if (isParsingLlm) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    } else {
+                        Icon(Icons.Default.Psychology, contentDescription = null,
+                            modifier = Modifier.size(16.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (isParsingLlm) "解析中..." else "LLM 解析")
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                OutlinedButton(
+                    onClick = onParseRule,
+                    modifier = Modifier.weight(1f),
+                    enabled = testInput.isNotBlank() && !isParsingRule
+                ) {
+                    if (isParsingRule) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(Icons.Default.Rule, contentDescription = null,
+                            modifier = Modifier.size(16.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (isParsingRule) "解析中..." else "规则解析")
+                }
             }
 
-            testResult?.let { result ->
+            // LLM 结果
+            llmResult?.let { r ->
                 Spacer(Modifier.height(8.dp))
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    Text(
-                        result,
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                ParseResultCard(r, isLlm = true)
+            }
+
+            // 规则结果
+            ruleResult?.let { r ->
+                Spacer(Modifier.height(4.dp))
+                ParseResultCard(r, isLlm = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ParseResultCard(result: TestParseResult, isLlm: Boolean) {
+    val bgColor = if (isLlm) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+        else MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
+    Surface(shape = RoundedCornerShape(8.dp), color = bgColor) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (isLlm) "🤖 LLM 解析" else "⚙️ 规则解析",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "金额: ${result.amount}  商户: ${result.merchant}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "分类: ${result.category}  置信度: ${result.confidence}%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (result.confidence >= 60) {
+                Text("✅", style = MaterialTheme.typography.labelLarge)
+            } else if (result.confidence > 0) {
+                Text("⚠️", style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticPanel(
+    debugInfo: String,
+    debugTimestamp: String,
+    onRefresh: () -> Unit,
+    onExport: () -> Unit,
+    onCopyRootText: () -> Unit,
+    onCopyEventText: () -> Unit,
+    hasRootText: Boolean,
+    hasEventText: Boolean
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.BugReport, contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.width(6.dp))
+                Text("诊断信息",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onRefresh, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新",
+                        modifier = Modifier.size(18.dp))
+                }
+            }
+
+            // 快捷操作
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (hasRootText) {
+                    AssistChip(
+                        onClick = onCopyRootText,
+                        label = { Text("→ 节点文本", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = { Icon(Icons.Default.TextSnippet, null, Modifier.size(14.dp)) },
+                        modifier = Modifier.height(28.dp)
                     )
+                }
+                if (hasEventText) {
+                    AssistChip(
+                        onClick = onCopyEventText,
+                        label = { Text("→ 事件文本", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = { Icon(Icons.Default.EventNote, null, Modifier.size(14.dp)) },
+                        modifier = Modifier.height(28.dp)
+                    )
+                }
+                AssistChip(
+                    onClick = onExport,
+                    label = { Text("导出", style = MaterialTheme.typography.labelSmall) },
+                    leadingIcon = { Icon(Icons.Default.Share, null, Modifier.size(14.dp)) },
+                    modifier = Modifier.height(28.dp)
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    val lines = debugInfo.lines().take(30)
+                    lines.forEach { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                    if (debugTimestamp.isNotBlank() && debugTimestamp.startsWith("✅")) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            debugTimestamp,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }

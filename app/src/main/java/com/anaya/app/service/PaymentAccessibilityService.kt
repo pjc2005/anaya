@@ -176,13 +176,28 @@ class PaymentAccessibilityService : AccessibilityService() {
         val pkg = pendingPkg ?: return
         val platform = Platform.fromPackage(pkg) ?: return
 
-        // Layer 1: 无障碍节点树 + 规则引擎
+        // 记录调试信息
         val root = rootInActiveWindow
+        val rootNodeText = if (root != null) dumpNodeText(root) else ""
+        val eventText = "$pendingEventText $pendingEventDesc".trim()
+
+        var layer1Success = false
+        var failureReason = ""
+
+        // Layer 1: 无障碍节点树 + 规则引擎
         if (root != null) {
             Log.d(TAG, "${platform.label}: layer1 scanning with rule engine...")
             try {
                 val result = CaptureEngine.runRules(root, pkg)
                 if (result != null) {
+                    layer1Success = true
+                    AccessibilityDebugState.recordScan(
+                        platform = platform.label,
+                        eventText = eventText,
+                        rootNodeText = rootNodeText,
+                        ruleMatchResult = "Layer1 匹配规则: ${result.rule.name} → ${result.merchant} ¥${result.amount / 100.0}",
+                        success = true
+                    )
                     scope.launch { onPaymentDetected(platform, result) }
                     return
                 }
@@ -202,7 +217,6 @@ class PaymentAccessibilityService : AccessibilityService() {
         }
 
         // Layer 2: 事件文本降级 — LLM 解析 + 规则回退
-        val eventText = "$pendingEventText $pendingEventDesc".trim()
         if (eventText.isNotBlank()) {
             scope.launch {
                 // LLM 优先
@@ -253,6 +267,22 @@ class PaymentAccessibilityService : AccessibilityService() {
             }
         } else {
             Log.d(TAG, "${platform.label}: OCR screenshot not available on this device")
+            // 同步路径：在这里记录调试信息（Layer2/3 异步会在各自的协程中更新结果）
+            if (!layer1Success) {
+                val failReason = buildString {
+                    if (root == null) append("rootInActiveWindow 为 null; ")
+                    if (eventText.isBlank()) append("事件文本为空; ")
+                    if (!screenshotFallback.isAvailable) append("截图降级不可用")
+                }
+                AccessibilityDebugState.recordScan(
+                    platform = platform.label,
+                    eventText = eventText,
+                    rootNodeText = rootNodeText,
+                    ruleMatchResult = "⚠️ 三层均未匹配 — $failReason",
+                    success = false,
+                    failureReason = failReason
+                )
+            }
         }
     }
 
@@ -571,5 +601,28 @@ class PaymentAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "PaymentAccessibility"
+
+        /**
+         * 从 AccessibilityNodeInfo 中提取关键文本用于调试
+         */
+        private fun dumpNodeText(node: AccessibilityNodeInfo): String {
+            val texts = mutableListOf<String>()
+            fun collect(n: AccessibilityNodeInfo?, depth: Int) {
+                if (n == null || depth > 6) return
+                val text = n.text?.toString()?.trim()
+                val desc = n.contentDescription?.toString()?.trim()
+                if (!text.isNullOrBlank() && text.length > 1 && text.length < 200) {
+                    texts.add(text)
+                }
+                if (!desc.isNullOrBlank() && desc.length > 1 && desc.length < 200) {
+                    texts.add(desc)
+                }
+                for (i in 0 until n.childCount) {
+                    collect(n.getChild(i), depth + 1)
+                }
+            }
+            collect(node, 0)
+            return texts.take(50).joinToString(" | ")
+        }
     }
 }
